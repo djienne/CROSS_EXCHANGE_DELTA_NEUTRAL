@@ -2,7 +2,7 @@
 
 **Automated 24/7 funding rate arbitrage bot** for EdgeX and Lighter cryptocurrency perpetual futures exchanges.
 
-This system continuously monitors multiple markets, executes delta-neutral positions to capture funding rate differences, and automatically rotates them to maximize profit while maintaining market-neutral exposure.
+This system continuously monitors multiple markets, executes delta-neutral positions to capture funding rate differences, and automatically rotates them to maximize profit while maintaining market-neutral exposure and farming volume at low risk.
 
 Referral link to support this work: https://pro.edgex.exchange/referral/FREQTRADE
 
@@ -200,4 +200,5 @@ docker-compose up -d liquidation_monitor
 - ⚠️ **Leverage is risky.** It amplifies both gains and losses.
 - ⚠️ **Network failures can happen.** The bot is designed to detect if one leg of a trade fails, but you should be prepared to intervene manually.
 - ⚠️ **Maintain a margin buffer.** Keep extra capital in your accounts (>20%) to avoid liquidation during normal price fluctuations.
+
 
