@@ -5,7 +5,7 @@
 ## 🎯 Overview
 
 This is an **automated trading system** that runs 24/7 to capture funding rate arbitrage. The bot:
-- 📊 **Analyzes** funding rates across 10+ cryptocurrency markets
+- 📊 **Analyzes** funding rates across may cryptocurrency markets (user can specify a list)
 - 🎯 **Selects** the best opportunity (highest net APR)
 - 🔄 **Opens** simultaneous LONG and SHORT positions (delta-neutral)
 - ⏱️ **Holds** for 8 hours collecting funding payments
@@ -711,3 +711,4 @@ For issues or questions, review:
 1. `hedge_cli.log` for detailed error messages
 2. `CLAUDE.md` for technical architecture details
 3. Exchange API documentation for platform-specific issues
+
