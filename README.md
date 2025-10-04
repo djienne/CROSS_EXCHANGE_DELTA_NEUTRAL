@@ -153,65 +153,6 @@ python hedge_cli.py test_leverage
 python hedge_cli.py test --notional 20
 ```
 
-## 🤖 Automated Rotation Bot
-
-For fully automated 24/7 operation, use the **auto_rotation_bot** which continuously rotates positions to maximize funding arbitrage profits.
-
-<img src="rotation_bot.png" alt="Rotation Bot Terminal Output" width="800">
-
-### Quick Start
-
-```bash
-# Run the automated bot (uses rotation_bot_config.json)
-python auto_rotation_bot.py
-
-# Run with Docker (recommended for 24/7 operation)
-docker-compose up -d auto_rotation_bot
-
-# View logs
-docker-compose logs -f auto_rotation_bot
-```
-
-### What It Does
-
-1. **ANALYZING**: Fetches funding rates for all monitored symbols
-2. **OPENING**: Opens delta-neutral position on best opportunity
-3. **HOLDING**: Monitors position health every 5 minutes (configurable)
-4. **CLOSING**: Exits position after hold duration (default: 8 hours)
-5. **WAITING**: Brief cooldown (default: 5 minutes)
-6. **REPEATS**: Starts next cycle automatically
-
-### Key Features
-
-- ✅ **Cycle Counter**: Persistent cycle tracking across restarts (displayed as "Cycle #N")
-- ✅ **Real-time Monitoring**: Shows position timing, PnL, and funding rates table
-- ✅ **Stop-Loss Protection**: Auto-closes if worst leg exceeds threshold (default: 25%)
-- ✅ **Capital Tracking**: Monitors EdgeX total equity and available balance
-- ✅ **Crash Recovery**: Automatically detects and reconciles positions on restart
-- ✅ **State Persistence**: All state saved to `logs/bot_state.json`
-
-### Configuration
-
-Edit `rotation_bot_config.json`:
-
-```json
-{
-  "symbols_to_monitor": ["BTC", "ETH", "SOL", "HYPE", ...],
-  "leverage": 3,
-  "notional_per_position": 320.0,
-  "hold_duration_hours": 8.0,
-  "check_interval_seconds": 300,
-  "stop_loss_percent": 25.0
-}
-```
-
-**Key Parameters:**
-- `check_interval_seconds`: How often to check position health (default: 300s/5min)
-- `stop_loss_percent`: Closes if worst leg loses this % of notional (default: 25%)
-- `hold_duration_hours`: How long to hold each position (default: 8h)
-
-See [AUTO_ROTATION_BOT_README.md](AUTO_ROTATION_BOT_README.md) for detailed documentation.
-
 ---
 
 ## 🛠️ Manual Trading CLI (hedge_cli.py)
@@ -710,5 +651,6 @@ For issues or questions, review:
 1. `hedge_cli.log` for detailed error messages
 2. `CLAUDE.md` for technical architecture details
 3. Exchange API documentation for platform-specific issues
+
 
 
