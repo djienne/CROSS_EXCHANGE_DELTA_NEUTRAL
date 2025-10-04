@@ -560,3 +560,4 @@ For issues or questions, review:
 1. `hedge_cli.log` for detailed error messages
 2. `CLAUDE.md` for technical architecture details
 3. Exchange API documentation for platform-specific issues
+
