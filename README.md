@@ -128,28 +128,33 @@ The bot will:
 3. ✅ Start analyzing funding rates
 4. ✅ Open the best position and begin rotation cycle
 
-**That's it!** The bot now runs on autopilot. Check the console or logs to monitor progress.
+**That's it!** The bot now runs on autopilot.
 
-### 5. (Optional) Test Manually First
+### 5. Monitor the Bot
 
-If you want to test the system manually before running the bot:
+<img src="rotation_bot.png" alt="Rotation Bot Terminal Output" width="800">
+
+The bot displays:
+- Current cycle number and position details
+- Real-time PnL (EdgeX, Lighter, Total)
+- Available capital and max position size
+- Top 5 funding opportunities (highlights current position)
+- Time elapsed/remaining until position close
+
+See [AUTO_ROTATION_BOT_README.md](AUTO_ROTATION_BOT_README.md) for complete documentation.
+
+### 6. (Optional) Test Manually First
+
+Before running the bot, you can test manually with small positions:
 
 ```bash
-# Create a manual trading config
-# check hedge_config.json
-{
-  "symbol": "PAXG",
-  "quote": "USD",
-  "long_exchange": "lighter",
-  "short_exchange": "edgex",
-  "leverage": 3,
-  "notional": 40
-}
+# Create hedge_config.json for manual testing
+# See example in Configuration Details section below
 
 # Test leverage setup (no trading)
 python hedge_cli.py test_leverage
 
-# Test with small position ($20 notional)
+# Test with $20 position
 python hedge_cli.py test --notional 20
 ```
 
@@ -157,131 +162,21 @@ python hedge_cli.py test --notional 20
 
 ## 🛠️ Manual Trading CLI (hedge_cli.py)
 
-For manual position management and analysis, use the `hedge_cli.py` tool. This is useful when you want direct control or need to analyze markets before running the bot.
+For manual control or analysis, use `hedge_cli.py`. Useful for testing or when you need direct control over positions.
 
-### Analysis Commands
+**Key Commands:**
 
-#### Check Funding Rates
-```bash
-python hedge_cli.py --config hedge_config.json funding
+| Command | Description |
+|---------|-------------|
+| `python hedge_cli.py funding_all` | Compare funding rates across all markets |
+| `python hedge_cli.py funding` | Check funding rates for configured symbol |
+| `python hedge_cli.py capacity` | Calculate max position size from available capital |
+| `python hedge_cli.py status` | Check current position status on both exchanges |
+| `python hedge_cli.py open --size-quote 100` | Open $100 delta-neutral position |
+| `python hedge_cli.py close` | Close both positions |
+| `python hedge_cli.py test --notional 20` | Test with $20 position (auto-closes) |
 
-# Or using default config
-python hedge_cli.py funding
-```
-Shows current and historical funding rates, calculates APR, and recommends optimal setup. Auto-updates config if suboptimal.
-
-#### Compare Multiple Markets
-```bash
-python hedge_cli.py --config hedge_config.json funding_all
-
-# Or specify symbols
-python hedge_cli.py funding_all --symbols BTC ETH SOL
-```
-Displays funding rates and optimal configurations for multiple markets in a comparison table.
-
-#### Check Leverage Information
-```bash
-python hedge_cli.py --config hedge_config.json check_leverage
-
-# Or specify symbols
-python hedge_cli.py check_leverage --symbols BTC ETH PAXG
-```
-Shows maximum and default leverage available for each market on both exchanges.
-
-#### Check Available Capacity
-```bash
-python hedge_cli.py --config hedge_config.json capacity
-
-# Or using default config
-python hedge_cli.py capacity
-```
-Calculates maximum delta-neutral position size based on available capital on both exchanges.
-
-#### Check Position Status
-```bash
-python hedge_cli.py --config hedge_config.json status
-
-# Or using default config
-python hedge_cli.py status
-```
-Displays current delta-neutral position status across both exchanges, including position sizes, notional values, hedge quality, and net exposure.
-
-### Trading Commands
-
-#### Open Delta-Neutral Position
-```bash
-# Using default notional from config
-python hedge_cli.py --config hedge_config.json open
-
-# Using quote currency (USD)
-python hedge_cli.py --config hedge_config.json open --size-quote 100
-
-# Using base currency (e.g., PAXG)
-python hedge_cli.py --config hedge_config.json open --size-base 0.05
-
-# With default config
-python hedge_cli.py open --size-quote 100
-
-# With custom cross-ticks (default is 10)
-python hedge_cli.py open --size-quote 100 --cross-ticks 15
-```
-
-**Notes:**
-- If neither `--size-quote` nor `--size-base` is specified, the `open` command uses the `notional` value from `hedge_config.json` (default: 40 USD)
-- Default `cross_ticks` is 10 for fast execution. Increase for more aggressive fills, decrease for better pricing.
-
-#### Close Both Positions
-```bash
-python hedge_cli.py --config hedge_config.json close
-
-# Or using default config
-python hedge_cli.py close
-
-# With custom cross-ticks (default is 10)
-python hedge_cli.py close --cross-ticks 15
-```
-
-**Note:** Default `cross_ticks` is 10 for fast execution.
-
-### Testing Commands
-
-#### Test Leverage Setup
-```bash
-python hedge_cli.py --config hedge_config.json test_leverage
-
-# Or using default config path (hedge_config.json)
-python hedge_cli.py test_leverage
-```
-Tests leverage configuration on both exchanges without opening positions.
-
-#### Test Complete Hedge Cycle
-```bash
-# Default $20 test with default config
-python hedge_cli.py test --notional 20
-
-# Using custom config file
-python hedge_cli.py --config my_config.json test --notional 20
-
-# Custom notional size
-python hedge_cli.py test --notional 50
-
-# Test with custom cross-ticks (default is 10)
-python hedge_cli.py test --notional 20 --cross-ticks 15
-
-# Test with automatic close after 5 seconds
-python hedge_cli.py test_auto --notional 20
-
-# Test auto with custom cross-ticks (default is 10)
-python hedge_cli.py test_auto --notional 20 --cross-ticks 15
-```
-The `test` command opens a small position, waits 5 seconds, then automatically closes it. The `test_auto` command does the same with automatic cleanup. Default `cross_ticks` is 10.
-
-**Note:** The `--config` argument must come **before** the command name.
-
-### Manual Trading Configuration (hedge_config.json)
-
-For manual trading with `hedge_cli.py`, create a `hedge_config.json` file:
-
+**Manual Trading Config (hedge_config.json):**
 ```json
 {
   "symbol": "PAXG",
@@ -293,13 +188,65 @@ For manual trading with `hedge_cli.py`, create a `hedge_config.json` file:
 }
 ```
 
-This specifies a single market to trade. The `funding` command will auto-update `long_exchange` and `short_exchange` to optimal values.
+<details>
+<summary><b>📖 View All Manual Commands</b></summary>
+
+### Analysis Commands
+
+```bash
+# Check funding rates
+python hedge_cli.py funding
+
+# Compare multiple markets
+python hedge_cli.py funding_all --symbols BTC ETH SOL
+
+# Check leverage limits
+python hedge_cli.py check_leverage
+
+# Check available capital
+python hedge_cli.py capacity
+
+# Check position status
+python hedge_cli.py status
+```
+
+### Trading Commands
+
+```bash
+# Open position (uses notional from config)
+python hedge_cli.py open
+
+# Open with specific size
+python hedge_cli.py open --size-quote 100
+python hedge_cli.py open --size-base 0.05
+
+# Close positions
+python hedge_cli.py close
+```
+
+### Testing Commands
+
+```bash
+# Test leverage setup
+python hedge_cli.py test_leverage
+
+# Test open+close cycle
+python hedge_cli.py test --notional 20
+
+# Test with auto-close
+python hedge_cli.py test_auto --notional 20
+```
+
+**Note:** Use `--config path/to/config.json` before the command to use a different config file.
+
+</details>
 
 ---
 
 ## 🔧 Configuration Details
 
-### hedge_config.json
+<details>
+<summary><b>📄 hedge_config.json (for manual trading)</b></summary>
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -311,6 +258,8 @@ This specifies a single market to trade. The `funding` command will auto-update 
 | `notional` | number | Default notional size in quote currency for `open` command (default: 40.0) |
 
 **Note:** The `funding` command will automatically update `long_exchange` and `short_exchange` to optimal values based on current funding rates.
+
+</details>
 
 ### rotation_bot_config.json
 
@@ -362,7 +311,8 @@ Configuration file for the automated rotation bot (`auto_rotation_bot.py`). This
 
 See [AUTO_ROTATION_BOT_README.md](AUTO_ROTATION_BOT_README.md) for complete documentation.
 
-### Environment Variables
+<details>
+<summary><b>🔑 Environment Variables (.env file)</b></summary>
 
 **EdgeX:**
 - `EDGEX_BASE_URL` - API base URL (default: https://pro.edgex.exchange)
@@ -379,7 +329,10 @@ See [AUTO_ROTATION_BOT_README.md](AUTO_ROTATION_BOT_README.md) for complete docu
 
 **Note:** Margin mode is hardcoded to "cross" for delta-neutral hedging and cannot be changed.
 
-## 🎓 How It Works
+</details>
+
+<details>
+<summary><b>🎓 How It Works (Technical Details)</b></summary>
 
 ### Funding Rate Arbitrage
 
@@ -404,7 +357,7 @@ The system ensures both exchanges receive **identical position sizes** despite d
 ### Leverage Management
 
 Before opening positions, the system:
-1. Sets leverage on both exchanges to match `hedge_config.json`
+1. Sets leverage on both exchanges to match config
 2. Verifies EdgeX leverage setting (when possible)
 3. Warns if configuration fails but allows proceeding
 
@@ -418,6 +371,8 @@ Uses **aggressive limit orders** that cross the spread:
 This ensures immediate fills while maintaining control over pricing (unlike market orders).
 
 Both positions are placed **concurrently** using `asyncio.gather()` to minimize timing risk.
+
+</details>
 
 ## 📊 Example Workflows
 
@@ -466,38 +421,24 @@ python hedge_cli.py close
 
 **Note:** Manual commands use `hedge_config.json` by default. Use `--config path/to/config.json` before the command name if using a different config file.
 
-## ⚠️ Important Notes
+## ⚠️ Risk Management
 
-### Risk Management
+**Important:**
+- ⚠️ Start with small positions ($50-100) to test the system
+- ⚠️ Monitor the bot regularly, especially first few cycles
+- ⚠️ Funding rates can change rapidly - past performance ≠ future results
+- ⚠️ Leverage amplifies both gains and losses
+- ⚠️ Network issues may cause one leg to fail (bot detects this)
+- ⚠️ Keep >20% margin buffer to avoid liquidation
 
-- Always test with small positions first (`test` command)
-- Monitor both exchanges for position verification
-- Be aware of potential liquidation risks with leverage
-- Funding rates can change rapidly
-- Network issues may cause one leg to fail (monitor warnings)
+**Safety Features:**
+- ✅ Stop-loss protection (auto-closes if leg exceeds threshold)
+- ✅ Position verification after opening/closing
+- ✅ Crash recovery with state reconciliation
+- ✅ Identical position sizes on both exchanges (prevents unhedged exposure)
 
-### Position Sizing Considerations
-
-- Uses the **minimum** of both exchanges' capacities
-- Applies 1% safety margin and 0.1% fee buffer
-- Rounds conservatively to both exchanges' tick sizes
-- Shows exact position size before execution
-
-### Leverage Settings
-
-- EdgeX leverage can be verified via positions API
-- Lighter leverage applies on next order (verification limited)
-- Failed leverage setup generates warnings but doesn't abort trades
-- Use `test_leverage` command to verify before trading
-
-### Funding Rate Notes
-
-- EdgeX: 6 periods per day = APR calculation × 6 × 365
-- Lighter: 24 periods per day = APR calculation × 24 × 365
-- Net APR accounts for different payment frequencies
-- Rates are volatile and can change between checks and execution
-
-## 🛡️ Liquidation Monitor
+<details>
+<summary><b>🛡️ Liquidation Monitor (Optional Safety Tool)</b></summary>
 
 Continuous monitoring service to protect delta-neutral positions from liquidation risk:
 
@@ -524,6 +465,8 @@ docker-compose up liquidation_monitor
 - Margin ratio exceeds threshold (default: 80%)
 - Position becomes unhedged (only one side has position)
 - Critical errors fetching position data
+
+</details>
 
 ## 🐳 Docker Support
 
@@ -597,11 +540,17 @@ docker-compose build
 - Console shows INFO level and above with colored output
 - Detailed position health tracking and auto-close events
 
-## 🔍 Troubleshooting
+<details>
+<summary><b>🔍 Troubleshooting</b></summary>
+
+### Bot enters ERROR state
+- Check `logs/auto_rotation_bot.log` for details
+- Verify positions on both exchanges manually
+- Delete `logs/bot_state.json` and restart if needed
 
 ### "Computed size rounds to zero"
-- Increase `--size-quote` or `--size-base`
-- Check tick sizes with `capacity` command
+- Increase position size in config
+- Check available capital with `capacity` command
 
 ### "Leverage setting failed"
 - Verify API credentials in `.env`
@@ -612,45 +561,29 @@ docker-compose build
 - Check both exchanges manually for partial fills
 - Review `hedge_cli.log` for detailed error messages
 - Verify sufficient available balance on both exchanges
-- If you see floating-point precision errors (e.g., `0.059000000000000004`), the system uses Decimal arithmetic to prevent this
 
-### Unequal position sizes
-- System automatically uses coarser tick size
-- Check console output for tick size information
-- Review `hedge_cli.log` for scaled unit calculations
+### Bot keeps waiting, no positions opened
+- Lower `min_net_apr_threshold` in config (try 3-5%)
+- Add more symbols to `symbols_to_monitor`
+- Wait for better funding rate conditions
 
-## 🤝 Contributing
+</details>
 
-This is a private trading system. Modifications should be thoroughly tested using:
-1. `test_leverage` command
-2. `test` command with small notional
-3. Manual verification on exchange UIs
+## 📚 Documentation
 
-## 📄 License
-
-Proprietary - Internal use only
-
-## 🔗 Exchange Documentation
-
-- [EdgeX API Docs](https://docs.edgex.exchange/)
-- [Lighter Protocol Docs](https://docs.lighter.xyz/)
-
-## ⚡ Performance Tips
-
-1. Use `funding_all` to identify best opportunities across markets
-2. Default `cross_ticks` is 10 for fast fills; adjust lower (5-7) for better pricing if needed
-3. Monitor funding rates regularly (they change throughout the day)
-4. Keep sufficient margin buffer on both exchanges (>10% recommended)
-5. Test with small sizes first to verify latency and execution
-6. Use `status` command to monitor hedge quality and balance
-7. Run `liquidation_monitor.py` to protect against liquidation risk automatically
+- [AUTO_ROTATION_BOT_README.md](AUTO_ROTATION_BOT_README.md) - Detailed bot documentation
+- [CLAUDE.md](CLAUDE.md) - Technical architecture for developers
+- [EdgeX API Docs](https://docs.edgex.exchange/) - EdgeX exchange documentation
+- [Lighter Protocol Docs](https://docs.lighter.xyz/) - Lighter exchange documentation
 
 ## 📧 Support
 
-For issues or questions, review:
-1. `hedge_cli.log` for detailed error messages
-2. `CLAUDE.md` for technical architecture details
-3. Exchange API documentation for platform-specific issues
+**Logs:**
+- Bot: `logs/auto_rotation_bot.log`
+- Manual CLI: `hedge_cli.log`
+- Liquidation Monitor: `logs/liquidation_monitor.log`
+
+**Issues:** Check logs first, then consult documentation above.
 
 
 
