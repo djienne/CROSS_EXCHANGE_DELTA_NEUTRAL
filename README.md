@@ -569,21 +569,5 @@ docker-compose build
 
 </details>
 
-## 📚 Documentation
-
-- [AUTO_ROTATION_BOT_README.md](AUTO_ROTATION_BOT_README.md) - Detailed bot documentation
-- [CLAUDE.md](CLAUDE.md) - Technical architecture for developers
-- [EdgeX API Docs](https://docs.edgex.exchange/) - EdgeX exchange documentation
-- [Lighter Protocol Docs](https://docs.lighter.xyz/) - Lighter exchange documentation
-
-## 📧 Support
-
-**Logs:**
-- Bot: `logs/auto_rotation_bot.log`
-- Manual CLI: `hedge_cli.log`
-- Liquidation Monitor: `logs/liquidation_monitor.log`
-
-**Issues:** Check logs first, then consult documentation above.
-
 
 
