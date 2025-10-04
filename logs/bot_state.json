@@ -1,0 +1,135 @@
+{
+  "version": "1.0",
+  "state": "HOLDING",
+  "current_cycle": 3,
+  "current_position": {
+    "symbol": "HYPE",
+    "quote": "USD",
+    "long_exchange": "lighter",
+    "short_exchange": "edgex",
+    "leverage": 3,
+    "opened_at": "2025-10-04T08:35:57.870662Z",
+    "target_close_at": "2025-10-04T16:35:57.870662Z",
+    "position_sizing": {
+      "configured_notional": 320.0,
+      "actual_notional": 303.061248,
+      "max_edgex_notional": 334.314846,
+      "max_lighter_notional": 319.01184,
+      "limiting_exchange": "Lighter",
+      "was_capital_limited": true,
+      "edgex_available_at_open": 111.438282,
+      "lighter_available_at_open": 106.33728
+    },
+    "entry": {
+      "edgex_contract_id": "10000072",
+      "lighter_market_id": "24",
+      "edgex_entry_price": 48.579,
+      "lighter_entry_price": 48.618,
+      "size_base": 6.23,
+      "edgex_size": -6.23,
+      "lighter_size": 6.23,
+      "edgex_balance_before": 111.438282,
+      "lighter_balance_before": 106.33728,
+      "timestamp": "2025-10-04T08:35:57.870662Z"
+    },
+    "expected_funding": {
+      "edgex_rate_per_period": 0.067389,
+      "lighter_rate_per_period": 0.0028,
+      "net_apr": 123.05391000000002,
+      "expected_duration_hours": 8.0
+    },
+    "current_pnl": {
+      "edgex_unrealized_pnl": 1.9624499999999898,
+      "lighter_unrealized_pnl": -2.125709,
+      "total_unrealized_pnl": -0.16325900000001026,
+      "timestamp": "2025-10-04T08:46:13.970785Z"
+    },
+    "time_elapsed_hours": 0.17113891611111112,
+    "time_remaining_hours": 7.8288610838888895,
+    "progress_percent": 2.139236451388889,
+    "last_check": "2025-10-04T08:46:16.654869Z"
+  },
+  "capital_status": {
+    "edgex_total": 113.32166642428523,
+    "edgex_available": 13.091033,
+    "lighter_total": 104.27574,
+    "lighter_available": 3.985677,
+    "total_capital": 217.59740642428523,
+    "total_available": 17.07671,
+    "max_position_notional": 11.957031,
+    "limiting_exchange": "Lighter",
+    "timestamp": "2025-10-04T08:46:16.658444Z",
+    "last_updated": "2025-10-04T08:46:16.658444Z"
+  },
+  "completed_cycles": [
+    {
+      "cycle_number": 1,
+      "symbol": "HYPE",
+      "opened_at": "2025-10-03T18:08:52.121633Z",
+      "closed_at": "2025-10-04T02:11:19.034475Z",
+      "duration_hours": 8.040809122777778,
+      "entry": {
+        "long_exchange": "lighter",
+        "short_exchange": "edgex",
+        "edgex_price": 49.672,
+        "lighter_price": 49.765,
+        "size_base": 6.21,
+        "edgex_balance_before": 0.0,
+        "lighter_balance_before": 113.469015
+      },
+      "exit": {
+        "edgex_price": 48.819,
+        "lighter_price": 48.8703,
+        "edgex_balance_after": 110.213477,
+        "lighter_balance_after": 107.513602,
+        "timestamp": "2025-10-04T02:11:19.034475Z"
+      },
+      "pnl_breakdown": {
+        "edgex_balance_change": 110.213477,
+        "lighter_balance_change": -5.955412999999993,
+        "total_realized_pnl": 104.258064,
+        "realized_pnl_percent": 91.88240860291243
+      },
+      "funding_stats": {
+        "expected_net_apr": 173.23338,
+        "hold_duration_hours": 8.040809122777778
+      },
+      "position_sizing": {
+        "configured_notional": 320.0,
+        "actual_notional": 308.751885,
+        "max_edgex_notional": 308.751885,
+        "max_lighter_notional": 308.751885,
+        "limiting_exchange": "unknown",
+        "was_capital_limited": false,
+        "edgex_available_at_open": 1.394285,
+        "lighter_available_at_open": 10.484601
+      },
+      "stop_loss_triggered": false,
+      "stop_loss_reason": null
+    }
+  ],
+  "cumulative_stats": {
+    "total_cycles": 1,
+    "successful_cycles": 1,
+    "failed_cycles": 0,
+    "total_realized_pnl": 104.258064,
+    "total_trading_pnl": 0.0,
+    "total_funding_pnl": 0.0,
+    "total_fees_paid": 0.0,
+    "best_cycle_pnl": 104.258064,
+    "worst_cycle_pnl": 104.258064,
+    "total_volume_traded": 12.42,
+    "total_hold_time_hours": 8.040809122777778,
+    "by_symbol": {
+      "HYPE": {
+        "cycles": 1,
+        "total_pnl": 104.258064,
+        "avg_pnl": 104.258064
+      }
+    },
+    "last_error": null,
+    "last_error_at": null
+  },
+  "config": null,
+  "last_updated": "2025-10-04T08:46:18.459770Z"
+}

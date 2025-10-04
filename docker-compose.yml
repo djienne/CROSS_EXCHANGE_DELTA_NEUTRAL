@@ -1,0 +1,140 @@
+version: '3.8'
+networks:
+  default:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.58.96.0/22
+services:
+  auto_rotation_bot:
+    build: .
+    command: python -u auto_rotation_bot.py
+    volumes:
+      - ./rotation_bot_config.json:/app/rotation_bot_config.json
+      - ./hedge_cli.py:/app/hedge_cli.py
+      - ./auto_rotation_bot.py:/app/auto_rotation_bot.py
+      - ./logs:/app/logs
+    env_file:
+      - .env
+    restart: unless-stopped
+    environment:
+      - BOT_STATE_FILE=/app/logs/bot_state.json
+      - PYTHONUNBUFFERED=1
+  # # --- Analysis Services ---
+  # capacity:
+  #   build: .
+  #   command: python hedge_cli.py capacity
+  #   volumes:
+  #     - ./hedge_config.json:/app/hedge_config.json
+  #     - ./hedge_cli.py:/app/hedge_cli.py
+  #     - ./hedge_cli.log:/app/hedge_cli.log
+  #   env_file:
+  #     - .env
+
+  # funding:
+  #   build: .
+  #   command: python hedge_cli.py funding
+  #   volumes:
+  #     - ./hedge_config.json:/app/hedge_config.json
+  #     - ./hedge_cli.py:/app/hedge_cli.py
+  #     - ./hedge_cli.log:/app/hedge_cli.log
+  #   env_file:
+  #     - .env
+
+  # funding_all:
+  #   build: .
+  #   command: python hedge_cli.py funding_all
+  #   volumes:
+  #     - ./hedge_config.json:/app/hedge_config.json
+  #     - ./hedge_cli.py:/app/hedge_cli.py
+  #     - ./hedge_cli.log:/app/hedge_cli.log
+  #   env_file:
+  #     - .env
+
+  # status:
+  #   build: .
+  #   command: python hedge_cli.py status
+  #   volumes:
+  #     - ./hedge_config.json:/app/hedge_config.json
+  #     - ./hedge_cli.py:/app/hedge_cli.py
+  #     - ./hedge_cli.log:/app/hedge_cli.log
+  #   env_file:
+  #     - .env
+
+  # check_leverage:
+  #   build: .
+  #   command: python hedge_cli.py check_leverage
+  #   volumes:
+  #     - ./hedge_config.json:/app/hedge_config.json
+  #     - ./hedge_cli.py:/app/hedge_cli.py
+  #     - ./hedge_cli.log:/app/hedge_cli.log
+  #   env_file:
+  #     - .env
+
+  # # --- Trading Services ---
+  # open:
+  #   build: .
+  #   command: python hedge_cli.py open
+  #   volumes:
+  #     - ./hedge_config.json:/app/hedge_config.json
+  #     - ./hedge_cli.py:/app/hedge_cli.py
+  #     - ./hedge_cli.log:/app/hedge_cli.log
+  #   env_file:
+  #     - .env
+
+  # close:
+  #   build: .
+  #   command: python hedge_cli.py close
+  #   volumes:
+  #     - ./hedge_config.json:/app/hedge_config.json
+  #     - ./hedge_cli.py:/app/hedge_cli.py
+  #     - ./hedge_cli.log:/app/hedge_cli.log
+  #   env_file:
+  #     - .env
+
+  # # --- Testing Services ---
+  # test_leverage:
+  #   build: .
+  #   command: python hedge_cli.py test_leverage
+  #   volumes:
+  #     - ./hedge_config.json:/app/hedge_config.json
+  #     - ./hedge_cli.py:/app/hedge_cli.py
+  #     - ./hedge_cli.log:/app/hedge_cli.log
+  #   env_file:
+  #     - .env
+
+  # test:
+  #   build: .
+  #   command: python hedge_cli.py test --notional 20
+  #   volumes:
+  #     - ./hedge_config.json:/app/hedge_config.json
+  #     - ./hedge_cli.py:/app/hedge_cli.py
+  #     - ./hedge_cli.log:/app/hedge_cli.log
+  #   env_file:
+  #     - .env
+
+  # test_auto:
+  #   build: .
+  #   command: python hedge_cli.py test_auto
+  #   volumes:
+  #     - ./hedge_config.json:/app/hedge_config.json
+  #     - ./hedge_cli.py:/app/hedge_cli.py
+  #     - ./hedge_cli.log:/app/hedge_cli.log
+  #   env_file:
+  #     - .env
+
+  # # --- Monitoring Services ---
+  # liquidation_monitor:
+  #   build: .
+  #   command: python liquidation_monitor.py
+  #   volumes:
+  #     - ./hedge_config.json:/app/hedge_config.json
+  #     - ./hedge_cli.py:/app/hedge_cli.py
+  #     - ./liquidation_monitor.py:/app/liquidation_monitor.py
+  #     - ./logs:/app/logs
+  #   env_file:
+  #     - .env
+  #   restart: unless-stopped
+
+  # # --- Automated Trading Services ---
+
