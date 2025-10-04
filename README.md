@@ -1,26 +1,42 @@
 # Cross-Exchange Delta Neutral Hedging System
 
-Delta-neutral arbitrage strategies across EdgeX and Lighter cryptocurrency perpetual futures exchanges. Captures funding rate arbitrage while maintaining market-neutral exposure and generating volume with forced position refresh at regular intervals.
+**Automated 24/7 funding rate arbitrage bot** for EdgeX and Lighter cryptocurrency perpetual futures exchanges. Continuously monitors multiple markets, selects the best opportunities, and rotates delta-neutral positions to maximize profits while maintaining market-neutral exposure.
 
 ## 🎯 Overview
 
-This system opens simultaneous **LONG** and **SHORT** positions across two exchanges, EdgeX and Lighter, to profit from funding rate differentials while remaining delta-neutral (market direction independent).
+This is an **automated trading system** that runs 24/7 to capture funding rate arbitrage. The bot:
+- 📊 **Analyzes** funding rates across 10+ cryptocurrency markets
+- 🎯 **Selects** the best opportunity (highest net APR)
+- 🔄 **Opens** simultaneous LONG and SHORT positions (delta-neutral)
+- ⏱️ **Holds** for 8 hours collecting funding payments
+- 💰 **Closes** and rotates to the next best opportunity
+- 🔁 **Repeats** indefinitely
 
-Referral link to support this work: https://pro.edgex.exchange/referral/FREQTRADE .
+Referral link to support this work: https://pro.edgex.exchange/referral/FREQTRADE
 
-> **🤖 For Automated Trading:** See [AUTO_ROTATION_BOT_README.md](AUTO_ROTATION_BOT_README.md) for documentation on the fully automated rotation bot that runs 24/7, continuously selecting and rotating the best funding arbitrage opportunities. The rotation bot handles analysis, position opening/closing, PnL tracking, and crash recovery automatically.
+### 🤖 Automated Rotation Bot (Primary Feature)
 
-### Key Features
+The **auto_rotation_bot** is the core of this system - a fully automated trading bot that requires no manual intervention:
 
-- ✅ **Delta-neutral positioning** across EdgeX and Lighter
-- ✅ **Automated rotation bot** for 24/7 funding arbitrage
-- ✅ **Automatic funding rate analysis** with APR calculations
-- ✅ **Intelligent position sizing** with tick-aware rounding
-- ✅ **Concurrent order execution** for minimal timing risk
-- ✅ **Leverage management** with verification
-- ✅ **Multi-market analysis** tools
-- ✅ **Built-in testing** functions
-- ✅ **Persistent state management** with crash recovery
+- ✅ **Fully Automated** - Set it and forget it, runs 24/7
+- ✅ **Intelligent Market Selection** - Always picks the best funding opportunity
+- ✅ **Position Rotation** - Automatically closes and reopens every 8 hours (configurable)
+- ✅ **Stop-Loss Protection** - Auto-closes if any leg exceeds risk threshold
+- ✅ **Crash Recovery** - Survives restarts, detects and reconciles positions
+- ✅ **Persistent State** - Full cycle history and cumulative PnL tracking
+- ✅ **Real-time Monitoring** - Console dashboard with position health and funding rates
+
+See [AUTO_ROTATION_BOT_README.md](AUTO_ROTATION_BOT_README.md) for detailed documentation.
+
+### 🛠️ Manual Trading CLI (Supporting Tool)
+
+The **hedge_cli** provides manual control when you need it:
+
+- ✅ **Analysis Tools** - Check funding rates, capacity, leverage across markets
+- ✅ **Manual Position Management** - Open/close specific positions on demand
+- ✅ **Testing Functions** - Test leverage setup and position cycles safely
+- ✅ **Position Monitoring** - Check current position status and health
+- ✅ **Direct Exchange Control** - For advanced users who want full control
 
 ## 📋 Prerequisites
 
@@ -29,7 +45,7 @@ Referral link to support this work: https://pro.edgex.exchange/referral/FREQTRAD
 - API credentials for both exchanges
 - Sufficient capital on both exchanges
 
-## 🚀 Quick Start
+## 🚀 Quick Start (Automated Bot)
 
 ### 1. Installation
 
@@ -40,7 +56,7 @@ cd /path/to/CROSS_EXCHANGE_DELTA_NEUTRAL
 pip install -r requirements.txt
 ```
 
-### 2. Configuration
+### 2. Configure API Credentials
 
 Copy the example environment file and fill in your credentials:
 
@@ -66,9 +82,61 @@ API_KEY_INDEX=0
 
 **Note:** A `.env.example` file is provided as a template with placeholder values. Margin mode is hardcoded to "cross" for delta-neutral hedging.
 
-Create `hedge_config.json` for your strategy:
+### 3. Configure the Rotation Bot
+
+Edit `rotation_bot_config.json` to customize the bot's behavior:
 
 ```json
+{
+  "symbols_to_monitor": ["BTC", "ETH", "SOL", "PAXG", "HYPE", "XPL"],
+  "quote": "USD",
+  "leverage": 3,
+  "notional_per_position": 320.0,
+  "hold_duration_hours": 8.0,
+  "wait_between_cycles_minutes": 5.0,
+  "check_interval_seconds": 300,
+  "min_net_apr_threshold": 5.0,
+  "stop_loss_percent": 25.0,
+  "enable_stop_loss": true
+}
+```
+
+**Key settings:**
+- `symbols_to_monitor`: Markets to analyze (more symbols = better opportunities)
+- `notional_per_position`: Maximum position size (bot adjusts to available capital)
+- `leverage`: Leverage on both exchanges (3-5x recommended)
+- `stop_loss_percent`: Safety threshold (25% for 3x leverage)
+
+See [Configuration Details](#-configuration-details) below for all parameters.
+
+### 4. Run the Bot
+
+```bash
+# Start the bot (runs continuously)
+python auto_rotation_bot.py
+
+# Or with Docker (recommended for 24/7 operation)
+docker-compose up -d auto_rotation_bot
+
+# View live logs
+docker-compose logs -f auto_rotation_bot
+```
+
+The bot will:
+1. ✅ Load state from previous session (if exists)
+2. ✅ Verify any existing positions
+3. ✅ Start analyzing funding rates
+4. ✅ Open the best position and begin rotation cycle
+
+**That's it!** The bot now runs on autopilot. Check the console or logs to monitor progress.
+
+### 5. (Optional) Test Manually First
+
+If you want to test the system manually before running the bot:
+
+```bash
+# Create a manual trading config
+cat > hedge_config.json << EOF
 {
   "symbol": "PAXG",
   "quote": "USD",
@@ -77,19 +145,79 @@ Create `hedge_config.json` for your strategy:
   "leverage": 3,
   "notional": 40
 }
-```
+EOF
 
-### 3. Run Tests
-
-```bash
 # Test leverage setup (no trading)
-python hedge_cli.py test_leverage --config hedge_config.json
+python hedge_cli.py test_leverage
 
 # Test with small position ($20 notional)
-python hedge_cli.py test --config hedge_config.json --notional 20
+python hedge_cli.py test --notional 20
 ```
 
-## 📚 Commands
+## 🤖 Automated Rotation Bot
+
+For fully automated 24/7 operation, use the **auto_rotation_bot** which continuously rotates positions to maximize funding arbitrage profits.
+
+<img src="rotation_bot.png" alt="Rotation Bot Terminal Output" width="800">
+
+### Quick Start
+
+```bash
+# Run the automated bot (uses rotation_bot_config.json)
+python auto_rotation_bot.py
+
+# Run with Docker (recommended for 24/7 operation)
+docker-compose up -d auto_rotation_bot
+
+# View logs
+docker-compose logs -f auto_rotation_bot
+```
+
+### What It Does
+
+1. **ANALYZING**: Fetches funding rates for all monitored symbols
+2. **OPENING**: Opens delta-neutral position on best opportunity
+3. **HOLDING**: Monitors position health every 5 minutes (configurable)
+4. **CLOSING**: Exits position after hold duration (default: 8 hours)
+5. **WAITING**: Brief cooldown (default: 5 minutes)
+6. **REPEATS**: Starts next cycle automatically
+
+### Key Features
+
+- ✅ **Cycle Counter**: Persistent cycle tracking across restarts (displayed as "Cycle #N")
+- ✅ **Real-time Monitoring**: Shows position timing, PnL, and funding rates table
+- ✅ **Stop-Loss Protection**: Auto-closes if worst leg exceeds threshold (default: 25%)
+- ✅ **Capital Tracking**: Monitors EdgeX total equity and available balance
+- ✅ **Crash Recovery**: Automatically detects and reconciles positions on restart
+- ✅ **State Persistence**: All state saved to `logs/bot_state.json`
+
+### Configuration
+
+Edit `rotation_bot_config.json`:
+
+```json
+{
+  "symbols_to_monitor": ["BTC", "ETH", "SOL", "HYPE", ...],
+  "leverage": 3,
+  "notional_per_position": 320.0,
+  "hold_duration_hours": 8.0,
+  "check_interval_seconds": 300,
+  "stop_loss_percent": 25.0
+}
+```
+
+**Key Parameters:**
+- `check_interval_seconds`: How often to check position health (default: 300s/5min)
+- `stop_loss_percent`: Closes if worst leg loses this % of notional (default: 25%)
+- `hold_duration_hours`: How long to hold each position (default: 8h)
+
+See [AUTO_ROTATION_BOT_README.md](AUTO_ROTATION_BOT_README.md) for detailed documentation.
+
+---
+
+## 🛠️ Manual Trading CLI (hedge_cli.py)
+
+For manual position management and analysis, use the `hedge_cli.py` tool. This is useful when you want direct control or need to analyze markets before running the bot.
 
 ### Analysis Commands
 
@@ -210,61 +338,24 @@ The `test` command opens a small position, waits 5 seconds, then automatically c
 
 **Note:** The `--config` argument must come **before** the command name.
 
-## 🤖 Automated Rotation Bot
+### Manual Trading Configuration (hedge_config.json)
 
-For fully automated 24/7 operation, use the **auto_rotation_bot** which continuously rotates positions to maximize funding arbitrage profits.
-
-<img src="rotation_bot.png" alt="Rotation Bot Terminal Output" width="800">
-
-### Quick Start
-
-```bash
-# Run the automated bot (uses rotation_bot_config.json)
-python auto_rotation_bot.py
-
-# Run with Docker (recommended for 24/7 operation)
-docker-compose up auto_rotation_bot
-```
-
-### What It Does
-
-1. **ANALYZING**: Fetches funding rates for all monitored symbols
-2. **OPENING**: Opens delta-neutral position on best opportunity
-3. **HOLDING**: Monitors position health every 5 minutes (configurable)
-4. **CLOSING**: Exits position after hold duration (default: 8 hours)
-5. **WAITING**: Brief cooldown (default: 5 minutes)
-6. **REPEATS**: Starts next cycle automatically
-
-### Key Features
-
-- ✅ **Cycle Counter**: Persistent cycle tracking across restarts (displayed as "Cycle #N")
-- ✅ **Real-time Monitoring**: Shows position timing, PnL, and funding rates table
-- ✅ **Stop-Loss Protection**: Auto-closes if worst leg exceeds threshold (default: 25%)
-- ✅ **Capital Tracking**: Monitors EdgeX total equity and available balance
-- ✅ **Crash Recovery**: Automatically detects and reconciles positions on restart
-- ✅ **State Persistence**: All state saved to `logs/bot_state.json`
-
-### Configuration
-
-Edit `rotation_bot_config.json`:
+For manual trading with `hedge_cli.py`, create a `hedge_config.json` file:
 
 ```json
 {
-  "symbols_to_monitor": ["BTC", "ETH", "SOL", "HYPE", ...],
+  "symbol": "PAXG",
+  "quote": "USD",
+  "long_exchange": "lighter",
+  "short_exchange": "edgex",
   "leverage": 3,
-  "notional_per_position": 320.0,
-  "hold_duration_hours": 8.0,
-  "check_interval_seconds": 300,
-  "stop_loss_percent": 25.0
+  "notional": 40
 }
 ```
 
-**Key Parameters:**
-- `check_interval_seconds`: How often to check position health (default: 300s/5min)
-- `stop_loss_percent`: Closes if worst leg loses this % of notional (default: 25%)
-- `hold_duration_hours`: How long to hold each position (default: 8h)
+This specifies a single market to trade. The `funding` command will auto-update `long_exchange` and `short_exchange` to optimal values.
 
-See [AUTO_ROTATION_BOT_README.md](AUTO_ROTATION_BOT_README.md) for detailed documentation.
+---
 
 ## 🔧 Configuration Details
 
@@ -280,6 +371,56 @@ See [AUTO_ROTATION_BOT_README.md](AUTO_ROTATION_BOT_README.md) for detailed docu
 | `notional` | number | Default notional size in quote currency for `open` command (default: 40.0) |
 
 **Note:** The `funding` command will automatically update `long_exchange` and `short_exchange` to optimal values based on current funding rates.
+
+### rotation_bot_config.json
+
+Configuration file for the automated rotation bot (`auto_rotation_bot.py`). This bot continuously monitors multiple markets and rotates positions to capture the best funding rate opportunities.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `symbols_to_monitor` | array | `["BTC", "ETH", ...]` | List of symbols to analyze for funding opportunities |
+| `quote` | string | `"USD"` | Quote currency for all markets |
+| `leverage` | number | `3` | Leverage to use on both exchanges for all positions |
+| `notional_per_position` | number | `320.0` | Maximum position size in USD (bot adjusts to actual available capital) |
+| `hold_duration_hours` | number | `8.0` | How long to hold each position before closing (hours) |
+| `wait_between_cycles_minutes` | number | `5.0` | Cooldown period between closing one position and opening the next (minutes) |
+| `check_interval_seconds` | number | `300` | How often to check position health while holding (seconds, default: 5 minutes) |
+| `min_net_apr_threshold` | number | `5.0` | Minimum net APR required to open a position (%) |
+| `stop_loss_percent` | number | `25.0` | Stop-loss threshold as % of position notional (triggers on either leg) |
+| `enable_stop_loss` | boolean | `true` | Enable automatic stop-loss protection |
+| `max_position_count` | number | `1` | Maximum number of concurrent positions (currently only supports 1) |
+| `enable_pnl_tracking` | boolean | `true` | Enable comprehensive PnL tracking |
+| `enable_health_monitoring` | boolean | `true` | Enable position health monitoring during hold period |
+
+**Example configuration:**
+```json
+{
+  "symbols_to_monitor": ["BTC", "ETH", "SOL", "PAXG", "HYPE", "XPL"],
+  "quote": "USD",
+  "leverage": 3,
+  "notional_per_position": 320.0,
+  "hold_duration_hours": 8.0,
+  "wait_between_cycles_minutes": 5.0,
+  "check_interval_seconds": 300,
+  "min_net_apr_threshold": 5.0,
+  "stop_loss_percent": 25.0,
+  "enable_stop_loss": true
+}
+```
+
+**Key Configuration Tips:**
+- **symbols_to_monitor**: Include 5-15 symbols for best opportunity selection. The bot will choose the symbol with highest net APR each cycle.
+- **notional_per_position**: Set to maximum desired position size. Bot automatically adjusts down based on available capital on both exchanges.
+- **check_interval_seconds**: 300s (5 minutes) balances monitoring frequency with API rate limits.
+- **stop_loss_percent**: Should be significantly higher than your leverage to avoid false triggers. For 3x leverage, 25% is recommended. For 5x leverage, use 10-15%.
+- **hold_duration_hours**: 8 hours captures 2 EdgeX funding periods (every 4h) and 8 Lighter funding periods (every 1h).
+
+**State Persistence:**
+- Bot state is saved to `logs/bot_state.json`
+- Includes cycle counter, current position details, completed cycles history, and cumulative statistics
+- Survives crashes and restarts with automatic position reconciliation
+
+See [AUTO_ROTATION_BOT_README.md](AUTO_ROTATION_BOT_README.md) for complete documentation.
 
 ### Environment Variables
 
@@ -338,7 +479,24 @@ This ensures immediate fills while maintaining control over pricing (unlike mark
 
 Both positions are placed **concurrently** using `asyncio.gather()` to minimize timing risk.
 
-## 📊 Example Workflow
+## 📊 Example Workflows
+
+### Automated Trading (Recommended)
+
+```bash
+# 1. Configure the bot
+nano rotation_bot_config.json  # Edit symbols, leverage, position size
+
+# 2. Start the bot
+docker-compose up -d auto_rotation_bot
+
+# 3. Monitor progress
+docker-compose logs -f auto_rotation_bot
+
+# That's it! The bot handles everything automatically.
+```
+
+### Manual Trading
 
 ```bash
 # 1. Analyze funding rates across markets
@@ -359,21 +517,14 @@ python hedge_cli.py test --notional 20
 # 6. Open real position
 python hedge_cli.py open --size-quote 500
 
-# 7. Start liquidation monitor (in separate terminal or background)
-python liquidation_monitor.py --interval 60 --margin-threshold 20.0
-# Or with Docker:
-docker-compose up -d liquidation_monitor
-
-# 8. Check position status
+# 7. Check position status
 python hedge_cli.py status
 
-# 9. Monitor positions (liquidation_monitor handles this automatically)
-
-# 10. Close when desired (or let liquidation_monitor auto-close if needed)
+# 8. Close when desired
 python hedge_cli.py close
 ```
 
-**Note:** All commands use `hedge_config.json` by default. Use `--config path/to/config.json` before the command name if using a different config file.
+**Note:** Manual commands use `hedge_config.json` by default. Use `--config path/to/config.json` before the command name if using a different config file.
 
 ## ⚠️ Important Notes
 
@@ -560,4 +711,3 @@ For issues or questions, review:
 1. `hedge_cli.log` for detailed error messages
 2. `CLAUDE.md` for technical architecture details
 3. Exchange API documentation for platform-specific issues
-
