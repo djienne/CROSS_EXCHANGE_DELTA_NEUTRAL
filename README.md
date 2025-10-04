@@ -201,12 +201,3 @@ docker-compose up -d liquidation_monitor
 - ⚠️ **Network failures can happen.** The bot is designed to detect if one leg of a trade fails, but you should be prepared to intervene manually.
 - ⚠️ **Maintain a margin buffer.** Keep extra capital in your accounts (>20%) to avoid liquidation during normal price fluctuations.
 
-<details>
-<summary><b>🔍 Troubleshooting</b></summary>
-
-- **Bot enters ERROR state**: Check `logs/auto_rotation_bot.log`. If state is corrupt, you may need to delete `logs/bot_state.json` and restart.
-- **"Computed size rounds to zero"**: Your `notional_per_position` is too small for the instrument's minimum size, or you have insufficient capital.
-- **"Leverage setting failed"**: Verify API keys and exchange permissions.
-- **Bot is waiting, not trading**: The `min_net_apr_threshold` may be too high for current market conditions, or you may need to add more symbols to `symbols_to_monitor`.
-
-</details>
