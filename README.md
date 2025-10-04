@@ -136,7 +136,7 @@ If you want to test the system manually before running the bot:
 
 ```bash
 # Create a manual trading config
-cat > hedge_config.json << EOF
+# check hedge_config.json
 {
   "symbol": "PAXG",
   "quote": "USD",
@@ -145,7 +145,6 @@ cat > hedge_config.json << EOF
   "leverage": 3,
   "notional": 40
 }
-EOF
 
 # Test leverage setup (no trading)
 python hedge_cli.py test_leverage
@@ -711,4 +710,5 @@ For issues or questions, review:
 1. `hedge_cli.log` for detailed error messages
 2. `CLAUDE.md` for technical architecture details
 3. Exchange API documentation for platform-specific issues
+
 
