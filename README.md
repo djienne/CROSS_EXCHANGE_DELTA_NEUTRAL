@@ -56,12 +56,14 @@ Edit `bot_config.json` to define your strategy.
   "notional_per_position": 320.0,
   "hold_duration_hours": 8.0,
   "min_net_apr_threshold": 5.0,
+  "min_volume_usd": 250000000,
   "stop_loss_percent": 25.0
 }
 ```
 - `symbols_to_monitor`: More symbols provide more opportunities.
 - `notional_per_position`: Max position size. The bot uses the lesser of this value or your available capital.
 - `leverage`: Recommended: 3-5x.
+- `min_volume_usd`: Minimum combined 24h volume in USD (default: $250M). Filters out low-liquidity pairs.
 - `stop_loss_percent`: Safety threshold. Recommended: 25% for 3x leverage.
 
 ### 4. Run the Bot
@@ -162,6 +164,7 @@ The system consists of three main Python modules:
 | `wait_between_cycles_minutes` | number | `5.0` | Cooldown period between closing one position and opening the next (minutes) |
 | `check_interval_seconds` | number | `300` | How often to check position health while holding (seconds, default: 5 minutes) |
 | `min_net_apr_threshold` | number | `5.0` | Minimum net APR required to open a position (%) |
+| `min_volume_usd` | number | `250000000` | Minimum combined 24h trading volume in USD (default: $250M) to filter low-liquidity pairs |
 | `stop_loss_percent` | number | `25.0` | Stop-loss threshold as % of position notional (triggers on either leg) |
 | `enable_stop_loss` | boolean | `true` | Enable automatic stop-loss protection |
 
@@ -267,6 +270,14 @@ docker-compose up -d liquidation_monitor
 
 ## 🆕 Recent Improvements
 
+**Volume Filtering (January 2025)**
+- **Automatic liquidity filtering**: Bot now checks 24h trading volume from both exchanges before selecting positions
+- **Configurable threshold**: Default minimum of $250M combined volume (EdgeX + Lighter) to avoid illiquid markets
+- **Real-time volume display**: Funding rate table now shows current 24h volume for each symbol
+- **Smart filtering**: Volume check applied during position selection but disabled for informational displays
+- **Customizable via config**: Set `min_volume_usd` in `bot_config.json` to your preferred threshold
+- Prevents positions in low-liquidity pairs that could have wide spreads or execution issues
+
 **Critical Bug Fixes (January 2025)**
 - **Fixed EdgeX position closing bug**: `account_id` must be converted to `int` for EdgeX SDK
   - Updated `emergency_close.py` to properly cast `account_id` to integer
@@ -290,7 +301,8 @@ docker-compose up -d liquidation_monitor
   1. **Startup** - Initial scan of all symbols showing market landscape
   2. **Before opening position** - Full comparison before selecting best opportunity
   3. **During holding** - Real-time updates with current position highlighted
-- Consistent formatted table with Symbol, EdgeX APR, Lighter APR, Net APR, and Long exchange
+- Comprehensive table with Symbol, EdgeX APR, Lighter APR, Net APR, **24h Volume**, and Long exchange
+- Volume displayed in user-friendly format: `$2.4B`, `$495M`, `$150M`, etc.
 - Color-coded markers: ★ BEST for highest APR, ◀ CURRENT for active position
 - Top 10 opportunities displayed for better market visibility
 

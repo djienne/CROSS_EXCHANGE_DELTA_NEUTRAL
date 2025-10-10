@@ -162,6 +162,7 @@ class BotConfig:
     wait_between_cycles_minutes: float = 5.0
     check_interval_seconds: int = 60
     min_net_apr_threshold: float = 5.0
+    min_volume_usd: float = 250_000_000  # Minimum 24h combined volume in USD (default: $250M)
     enable_stop_loss: bool = True
     enable_pnl_tracking: bool = True
     enable_health_monitoring: bool = True
@@ -186,6 +187,7 @@ class BotConfig:
                 'wait_between_cycles_minutes': 5.0,
                 'check_interval_seconds': 60,
                 'min_net_apr_threshold': 5.0,
+                'min_volume_usd': 250_000_000,
                 'enable_stop_loss': True,
                 'enable_pnl_tracking': True,
                 'enable_health_monitoring': True
@@ -377,8 +379,102 @@ async def configure_leverage(
     return edgex_success, lighter_success
 
 
-async def fetch_symbol_funding(symbol: str, quote: str, env: dict) -> dict:
-    """Fetch funding rates for a single symbol across both venues."""
+async def fetch_symbol_volume(symbol: str, quote: str, env: dict) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    """
+    Fetch 24h trading volume for a symbol from both exchanges.
+
+    Returns:
+        Tuple of (edgex_volume, lighter_volume, total_volume) in USD, or (None, None, None) if unavailable
+    """
+
+    async def fetch_edgex_volume() -> Optional[float]:
+        client = None
+        try:
+            client = EdgeXClient(
+                base_url=env["EDGEX_BASE_URL"],
+                account_id=int(env["EDGEX_ACCOUNT_ID"]) if env.get("EDGEX_ACCOUNT_ID") else 0,
+                stark_private_key=env.get("EDGEX_STARK_PRIVATE_KEY", ""),
+            )
+            contract_name = f"{symbol.upper()}{quote.upper()}"
+            metadata = await client.get_metadata()
+            contracts = metadata.get("data", {}).get("contractList", [])
+
+            contract_id = None
+            for contract in contracts:
+                if contract.get("contractName") == contract_name:
+                    contract_id = contract.get("contractId")
+                    break
+
+            if not contract_id:
+                return None
+
+            quote_data = await client.quote.get_24_hour_quote(contract_id)
+            if quote_data.get("code") == "SUCCESS" and quote_data.get("data"):
+                record = quote_data["data"][0]
+                # EdgeX uses 'value' field for 24h volume in quote currency
+                for field in ["value", "volume24h", "volume"]:
+                    if field in record and record[field]:
+                        return float(record[field])
+            return None
+        except Exception as e:
+            logger.debug(f"Error fetching EdgeX volume for {symbol}: {e}")
+            return None
+        finally:
+            if client and hasattr(client, 'internal_client'):
+                try:
+                    await client.internal_client.close()
+                except Exception:
+                    pass
+
+    async def fetch_lighter_volume() -> Optional[float]:
+        api_client = None
+        try:
+            api_client = lighter.ApiClient(configuration=lighter.Configuration(host=env["LIGHTER_BASE_URL"]))
+            order_api = lighter.OrderApi(api_client)
+
+            # Get exchange statistics which includes daily volume per market
+            stats_response = await order_api.exchange_stats()
+
+            # Find the market by symbol
+            for market_stats in stats_response.order_book_stats:
+                if market_stats.symbol.upper() == symbol.upper():
+                    return float(market_stats.daily_quote_token_volume)
+
+            return None
+        except Exception as e:
+            logger.debug(f"Error fetching Lighter volume for {symbol}: {e}")
+            return None
+        finally:
+            if api_client:
+                try:
+                    await api_client.close()
+                except Exception:
+                    pass
+
+    edgex_vol, lighter_vol = await asyncio.gather(fetch_edgex_volume(), fetch_lighter_volume())
+
+    total_vol = None
+    if edgex_vol is not None and lighter_vol is not None:
+        total_vol = edgex_vol + lighter_vol
+    elif edgex_vol is not None:
+        total_vol = edgex_vol
+    elif lighter_vol is not None:
+        total_vol = lighter_vol
+
+    return edgex_vol, lighter_vol, total_vol
+
+
+async def fetch_symbol_funding(symbol: str, quote: str, env: dict, check_volume: bool = True, min_volume_usd: float = 250_000_000) -> dict:
+    """
+    Fetch funding rates and volume for a single symbol across both venues.
+
+    Args:
+        symbol: Trading symbol (e.g., "BTC")
+        quote: Quote currency (e.g., "USD")
+        env: Environment variables
+        check_volume: Whether to check volume threshold (default: True)
+        min_volume_usd: Minimum combined 24h volume in USD (default: $250M)
+    """
     logger.info("Checking funding for %s...", symbol)
 
     edgex_rate_decimal: Optional[float] = None
@@ -420,7 +516,17 @@ async def fetch_symbol_funding(symbol: str, quote: str, env: dict) -> dict:
             if api_client:
                 await api_client.close()
 
-    edgex_rate_decimal, lighter_rate_decimal = await asyncio.gather(fetch_edgex_rate(), fetch_lighter_rate())
+    # Fetch funding rates and volume concurrently
+    if check_volume:
+        edgex_rate_decimal, lighter_rate_decimal, volume_data = await asyncio.gather(
+            fetch_edgex_rate(),
+            fetch_lighter_rate(),
+            fetch_symbol_volume(symbol, quote, env)
+        )
+        edgex_volume, lighter_volume, total_volume = volume_data
+    else:
+        edgex_rate_decimal, lighter_rate_decimal = await asyncio.gather(fetch_edgex_rate(), fetch_lighter_rate())
+        edgex_volume, lighter_volume, total_volume = None, None, None
 
     if edgex_rate_decimal is None or lighter_rate_decimal is None:
         missing = []
@@ -432,7 +538,23 @@ async def fetch_symbol_funding(symbol: str, quote: str, env: dict) -> dict:
             "symbol": symbol,
             "available": False,
             "missing_on": missing or ["Data unavailable"],
+            "edgex_volume": edgex_volume,
+            "lighter_volume": lighter_volume,
+            "total_volume": total_volume,
         }
+
+    # Check volume threshold if enabled
+    if check_volume and total_volume is not None:
+        if total_volume < min_volume_usd:
+            logger.info(f"{symbol}: Volume ${total_volume/1e6:.1f}M below threshold ${min_volume_usd/1e6:.0f}M")
+            return {
+                "symbol": symbol,
+                "available": False,
+                "missing_on": [f"Volume too low: ${total_volume/1e6:.1f}M < ${min_volume_usd/1e6:.0f}M"],
+                "edgex_volume": edgex_volume,
+                "lighter_volume": lighter_volume,
+                "total_volume": total_volume,
+            }
 
     edgex_apr = _calculate_apr(edgex_rate_decimal, 6)
     lighter_apr = _calculate_apr(lighter_rate_decimal, 3)
@@ -459,6 +581,9 @@ async def fetch_symbol_funding(symbol: str, quote: str, env: dict) -> dict:
         "long_exch": long_exch,
         "short_exch": short_exch,
         "net_apr": net_apr,
+        "edgex_volume": edgex_volume,
+        "lighter_volume": lighter_volume,
+        "total_volume": total_volume,
     }
 
 
@@ -1352,7 +1477,8 @@ async def compute_expected_funding(env: dict, config: BotConfig, symbol: str, lo
     net_apr = None
 
     try:
-        funding_info = await fetch_symbol_funding(symbol, config.quote, env)
+        # Disable volume checking for expected funding calculation (used in position recovery)
+        funding_info = await fetch_symbol_funding(symbol, config.quote, env, check_volume=False)
     except Exception as e:
         logger.debug(f"Funding lookup failed for {symbol}: {e}")
     else:
@@ -1538,7 +1664,7 @@ async def open_best_position(state_mgr: StateManager, env: dict, config: BotConf
         """Fetch funding for a symbol with individual timeout."""
         try:
             return await asyncio.wait_for(
-                fetch_symbol_funding(symbol, config.quote, env),
+                fetch_symbol_funding(symbol, config.quote, env, check_volume=True, min_volume_usd=config.min_volume_usd),
                 timeout=timeout
             )
         except asyncio.TimeoutError:
@@ -1938,15 +2064,15 @@ async def close_current_position(state_mgr: StateManager, env: dict):
 # ==================== Display Functions ====================
 
 def display_funding_table(funding_data: List[dict], current_symbol: Optional[str] = None, limit: int = 10):
-    """Display funding rates comparison table."""
+    """Display funding rates comparison table with volume information."""
     if not funding_data:
         logger.info(f"{Colors.GRAY}No funding data available{Colors.RESET}")
         return
 
     logger.info(f"\n{Colors.BOLD}📊 Funding Rates Overview (Top {min(limit, len(funding_data))}){Colors.RESET}")
-    logger.info(f"{Colors.CYAN}{'─' * 70}{Colors.RESET}")
-    logger.info(f"{'Symbol':<10} {'EdgeX APR':>10} {'Lighter APR':>12} {'Net APR':>10} {'Long':>8} {'Status':<15}")
-    logger.info(f"{Colors.GRAY}{'-' * 70}{Colors.RESET}")
+    logger.info(f"{Colors.CYAN}{'─' * 90}{Colors.RESET}")
+    logger.info(f"{'Symbol':<10} {'EdgeX APR':>10} {'Lighter APR':>12} {'Net APR':>10} {'Volume':>12} {'Long':>8} {'Status':<15}")
+    logger.info(f"{Colors.GRAY}{'-' * 90}{Colors.RESET}")
 
     best_symbol = funding_data[0].get('symbol') if funding_data else None
 
@@ -1956,6 +2082,18 @@ def display_funding_table(funding_data: List[dict], current_symbol: Optional[str
         lighter_apr = data.get('lighter_apr', 0)
         net_apr = data.get('net_apr', 0)
         long_exch = data.get('long_exch', 'N/A')
+        total_volume = data.get('total_volume')
+
+        # Format volume
+        if total_volume is not None:
+            if total_volume >= 1_000_000_000:
+                volume_str = f"${total_volume/1e9:.2f}B"
+            elif total_volume >= 1_000_000:
+                volume_str = f"${total_volume/1e6:.0f}M"
+            else:
+                volume_str = f"${total_volume/1e3:.0f}K"
+        else:
+            volume_str = "N/A"
 
         # Color code based on status
         status = ""
@@ -1967,9 +2105,9 @@ def display_funding_table(funding_data: List[dict], current_symbol: Optional[str
             status = "★ BEST"
             color = Colors.GREEN
 
-        logger.info(f"{color}{symbol:<10} {edgex_apr:>9.2f}% {lighter_apr:>11.2f}% {net_apr:>9.2f}% {long_exch:>8} {status:<15}{Colors.RESET}")
+        logger.info(f"{color}{symbol:<10} {edgex_apr:>9.2f}% {lighter_apr:>11.2f}% {net_apr:>9.2f}% {volume_str:>12} {long_exch:>8} {status:<15}{Colors.RESET}")
 
-    logger.info(f"{Colors.GRAY}{'-' * 70}{Colors.RESET}")
+    logger.info(f"{Colors.GRAY}{'-' * 90}{Colors.RESET}")
 
     # Show comparison if current is not best
     if current_symbol and best_symbol and current_symbol != best_symbol:
@@ -2423,7 +2561,8 @@ class RotationBot:
             """Fetch funding for a symbol with individual timeout."""
             try:
                 return await asyncio.wait_for(
-                    fetch_symbol_funding(symbol, config.quote, self.env),
+                    # Disable volume checking for informational display
+                    fetch_symbol_funding(symbol, config.quote, self.env, check_volume=False),
                     timeout=timeout
                 )
             except asyncio.TimeoutError:
@@ -2666,7 +2805,8 @@ class RotationBot:
                                 """Fetch funding for a symbol with individual timeout."""
                                 try:
                                     return await asyncio.wait_for(
-                    fetch_symbol_funding(symbol, config.quote, self.env),
+                                        # Disable volume checking for monitoring display
+                                        fetch_symbol_funding(symbol, config.quote, self.env, check_volume=False),
                                         timeout=timeout
                                     )
                                 except asyncio.TimeoutError:

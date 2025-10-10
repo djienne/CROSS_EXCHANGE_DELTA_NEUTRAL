@@ -51,12 +51,18 @@ docker-compose logs -f lighter_edgex_hedge
 
 **State Machine Architecture:**
 1. **IDLE** → Waiting to start analysis
-2. **ANALYZING** → Fetching funding rates, selecting best opportunity
+2. **ANALYZING** → Fetching funding rates and volumes, selecting best opportunity
 3. **OPENING** → Executing delta-neutral position entry
 4. **HOLDING** → Monitoring position health, collecting funding
 5. **CLOSING** → Exiting both positions
 6. **WAITING** → Cooldown period before next cycle
 7. **ERROR** → Manual intervention required
+
+**Volume-Based Position Selection:**
+- Bot fetches 24h trading volume from both exchanges concurrently with funding rates
+- Filters out symbols below `min_volume_usd` threshold (default: $250M combined)
+- Funding rate comparison table displays volume in human-readable format ($2.4B, $495M, etc.)
+- Volume check strategically disabled for informational displays (startup, monitoring)
 
 **Persistent State (`logs/bot_state.json`):**
 - `current_cycle`: Cycle counter (persists across restarts)
@@ -111,6 +117,7 @@ python examples/hedge_cli.py --config my_config.json open --size-quote 100
 - `notional_per_position`: Maximum position size in USD (bot adjusts to actual capital)
 - `hold_duration_hours`: How long to hold each position before closing
 - `min_net_apr_threshold`: Minimum net APR required to open a position (%)
+- `min_volume_usd`: Minimum combined 24h trading volume in USD (default: $250M) - filters out low-liquidity pairs
 - `enable_stop_loss`: Enable automatic stop-loss (auto-calculated from leverage)
 
 **hedge_config.json** (for manual CLI):
@@ -146,6 +153,7 @@ python examples/hedge_cli.py --config my_config.json open --size-quote 100
 - Position closing via offsetting aggressive limit orders
 - Capital retrieval from `get_account_asset()` endpoint
 - Funding rates from quote API and historical endpoint
+- Volume data from `quote.get_24_hour_quote()` API (`value` field for USD volume)
 - **Helper module:** `edgex_client.py` contains reusable functions
 - **CRITICAL:** `account_id` must be passed as `int`, not string (SDK uses bitwise operations)
 - **CRITICAL:** `contract_id` must be passed as `str` in `CreateOrderParams`
@@ -156,6 +164,7 @@ python examples/hedge_cli.py --config my_config.json open --size-quote 100
 - Position closing via dual reduce-only orders (buy + sell)
 - Capital retrieval via WebSocket `user_stats/{account_index}` channel
 - Funding rates from candlestick API
+- Volume data from `OrderApi.exchange_stats()` API (`daily_quote_token_volume`)
 - **Helper module:** `lighter_client.py` contains reusable functions:
   - `get_lighter_balance()`: Fetch balance via WebSocket
   - `get_lighter_market_details()`: Get market_id and tick sizes
@@ -189,6 +198,39 @@ The `capacity` command calculates maximum delta-neutral position size:
 3. Calculates per-venue capacity: `available_usd * (1 - buffers) * leverage / mid_price`
 4. Max size = minimum of long and short venue capacities
 5. Rounds conservatively using both exchanges' tick sizes
+
+### Utility Scripts
+
+**`check_volume.py`** - Volume comparison utility:
+```bash
+# Check 24h trading volume across both exchanges
+python check_volume.py
+
+# Show debug information about volume data fields
+python check_volume.py --debug
+```
+- Displays 24h trading volume for all symbols in `bot_config.json`
+- Shows EdgeX volume, Lighter volume, and combined total
+- Volume data used by bot for liquidity filtering
+- EdgeX volume from `quote.get_24_hour_quote()` API (`value` field)
+- Lighter volume from `OrderApi.exchange_stats()` API (`daily_quote_token_volume` field)
+
+**`test_funding_comparison.py`** - Funding rate analysis:
+```bash
+# Compare funding rates using symbols from bot_config.json
+python test_funding_comparison.py
+
+# Compare specific symbols
+python test_funding_comparison.py --symbols BTC ETH SOL
+
+# Custom quote currency
+python test_funding_comparison.py --symbols BTC ETH --quote USD
+```
+- Fetches and compares funding rates from both exchanges
+- Calculates net APR spread (profit opportunity)
+- Displays optimal strategy (which exchange to long/short)
+- Sorts results by best opportunities
+- Shows funding payment frequencies (EdgeX: 4h/6x daily, Lighter: hourly/24x daily)
 
 ### Emergency Close: `emergency_close.py`
 
@@ -382,6 +424,12 @@ docker-compose run test --notional 50
    - On restart: verify actual positions match expected state
    - Crash recovery: can resume HOLDING state if hedge still valid
 
+7. **Volume filtering pattern** (lighter_edgex_hedge.py):
+   - `fetch_symbol_volume(symbol, quote, env)`: Concurrent fetch from both exchanges
+   - `fetch_symbol_funding()`: Now fetches both funding rates AND volume data
+   - Strategic `check_volume` parameter: enabled for position selection, disabled for info displays
+   - Volume data cached and passed to `display_funding_table()` for user visibility
+
 ### Critical Implementation Details
 
 **EdgeX specifics:**
@@ -532,6 +580,17 @@ tail -f hedge_cli.log
   - `from_iso_z()`: Parses ISO timestamps, handling malformed formats gracefully
 - Eliminated all timezone-naive datetime operations
 - Compatible with Python 3.7+ (uses `timezone.utc` instead of `datetime.UTC`)
+
+### Volume Filtering (January 2025)
+- **Automatic liquidity filtering**: Bot checks 24h trading volume before selecting positions
+- **Configurable threshold**: Default minimum of $250M combined volume (EdgeX + Lighter)
+- **Real-time volume display**: Funding rate table shows current 24h volume for each symbol
+- **Smart filtering**: Volume check enabled for position selection, disabled for informational displays
+- **Customizable via config**: Set `min_volume_usd` in `bot_config.json` to your preferred threshold
+- Prevents positions in low-liquidity pairs that could have wide spreads or execution issues
+- Volume data retrieved from:
+  - EdgeX: `quote.get_24_hour_quote()` API (`value` field for USD volume)
+  - Lighter: `OrderApi.exchange_stats()` API (`daily_quote_token_volume` field)
 
 ### Execution Improvements
 - Default `cross_ticks` set to 100 for near-instant order fills
