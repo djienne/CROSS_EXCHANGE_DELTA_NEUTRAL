@@ -9,58 +9,124 @@ This is a **cross-exchange delta neutral hedging system** for cryptocurrency per
 ## Core Architecture
 
 The system consists of four main Python modules:
-- **`hedge_cli.py`**: Manual trading CLI tool with all core exchange functions
-- **`lighter_edgex_hedge.py`**: Automated 24/7 rotation bot (imports hedge_cli functions)
+- **`lighter_edgex_hedge.py`**: Automated 24/7 rotation bot (production bot, imports functions from other modules)
+- **`examples/hedge_cli.py`**: Manual trading CLI tool with all core exchange functions
 - **`lighter_client.py`**: Lighter exchange helper functions (balance, positions, orders, closing)
-- **`emergency_close.py`**: Emergency position closer (uses lighter_client functions)
+- **`edgex_client.py`**: EdgeX exchange helper functions (balance, positions, orders, closing)
+- **`emergency_close.py`**: Emergency position closer (uses lighter_client and edgex_client functions)
 
-### Main CLI Tool: `hedge_cli.py`
+### Dependency Flow
+```
+lighter_edgex_hedge.py (production bot)
+    ├── imports edgex_client.py (for EdgeX operations)
+    ├── imports lighter_client.py (for Lighter operations)
+    └── uses .env and bot_config.json
 
-The primary interface for managing hedged positions. Commands:
+examples/hedge_cli.py (manual CLI)
+    ├── imports edgex_client.py
+    ├── imports lighter_client.py
+    └── uses .env and hedge_config.json
+
+emergency_close.py (emergency tool)
+    ├── imports edgex_client.py
+    ├── imports lighter_client.py
+    └── uses .env only (independent of config files)
+```
+
+### Main Production Bot: `lighter_edgex_hedge.py`
+
+**Primary 24/7 production bot** that fully automates the funding arbitrage cycle.
+
+```bash
+# Run the bot (uses bot_config.json)
+python lighter_edgex_hedge.py
+
+# Run with custom config
+python lighter_edgex_hedge.py --config custom_config.json --state-file custom_state.json
+
+# Docker service (recommended for 24/7 operation)
+docker-compose up -d lighter_edgex_hedge
+docker-compose logs -f lighter_edgex_hedge
+```
+
+**State Machine Architecture:**
+1. **IDLE** → Waiting to start analysis
+2. **ANALYZING** → Fetching funding rates, selecting best opportunity
+3. **OPENING** → Executing delta-neutral position entry
+4. **HOLDING** → Monitoring position health, collecting funding
+5. **CLOSING** → Exiting both positions
+6. **WAITING** → Cooldown period before next cycle
+7. **ERROR** → Manual intervention required
+
+**Persistent State (`logs/bot_state.json`):**
+- `current_cycle`: Cycle counter (persists across restarts)
+- `current_position`: Active position details (symbol, sizing, entry prices, PnL)
+- `capital_status`: Real-time balance tracking on both exchanges
+- `completed_cycles`: Historical cycle records
+- `cumulative_stats`: Aggregate performance metrics
+
+**Key Features:**
+- Automatic recovery on restart (verifies actual positions match expected state)
+- Stop-loss protection (auto-calculated as `(100/leverage) * 0.7`)
+- Real-time PnL tracking for both exchanges
+- Capital monitoring (EdgeX uses `totalEquity`, Lighter uses WebSocket)
+- Graceful shutdown on CTRL+C
+
+### Manual CLI Tool: `examples/hedge_cli.py`
+
+The primary interface for manual trading and testing. Commands:
 
 ```bash
 # Analysis Commands
-python hedge_cli.py capacity                      # Check available capital
-python hedge_cli.py funding                       # Show funding rates (auto-updates config)
-python hedge_cli.py funding_all                   # Compare multiple markets
-python hedge_cli.py check_leverage                # Show leverage info for multiple markets
-python hedge_cli.py status                        # Check current position status
+python examples/hedge_cli.py capacity                      # Check available capital
+python examples/hedge_cli.py funding                       # Show funding rates (auto-updates config)
+python examples/hedge_cli.py funding_all                   # Compare multiple markets
+python examples/hedge_cli.py check_leverage                # Show leverage info for multiple markets
+python examples/hedge_cli.py status                        # Check current position status
 
 # Trading Commands
-python hedge_cli.py open                          # Open position using config notional
-python hedge_cli.py open --size-base 0.05         # Open position (base units)
-python hedge_cli.py open --size-quote 100         # Open position (quote units)
-python hedge_cli.py close                         # Close both positions
-python hedge_cli.py close --cross-ticks 5         # Close with aggressive fills
+python examples/hedge_cli.py open                          # Open position using config notional
+python examples/hedge_cli.py open --size-base 0.05         # Open position (base units)
+python examples/hedge_cli.py open --size-quote 100         # Open position (quote units)
+python examples/hedge_cli.py close                         # Close both positions
+python examples/hedge_cli.py close --cross-ticks 5         # Close with aggressive fills
 
 # Testing Commands
-python hedge_cli.py test_leverage                 # Test leverage setup (no trading)
-python hedge_cli.py test --notional 20            # Test open+close cycle ($20)
-python hedge_cli.py test_auto --notional 20       # Test with auto-close after 5s
+python examples/hedge_cli.py test_leverage                 # Test leverage setup (no trading)
+python examples/hedge_cli.py test --notional 20            # Test open+close cycle ($20)
+python examples/hedge_cli.py test_auto --notional 20       # Test with auto-close after 5s
 
 # Note: All commands use hedge_config.json by default
 # Use --config BEFORE the command if using a different file:
-python hedge_cli.py --config my_config.json open --size-quote 100
+python examples/hedge_cli.py --config my_config.json open --size-quote 100
 ```
 
 **Cross-ticks parameter** (`--cross-ticks N`): Controls how aggressively orders cross the spread. Higher values = more aggressive fills but worse pricing. Default is 100 ticks for near-instant execution.
 
 ### Configuration System
 
-**hedge_config.json** defines the hedging strategy:
+**bot_config.json** (for automated bot):
+- `symbols_to_monitor`: List of symbols to analyze for funding opportunities
+- `leverage`: Leverage to apply on both exchanges (recommend 3-5x)
+- `notional_per_position`: Maximum position size in USD (bot adjusts to actual capital)
+- `hold_duration_hours`: How long to hold each position before closing
+- `min_net_apr_threshold`: Minimum net APR required to open a position (%)
+- `enable_stop_loss`: Enable automatic stop-loss (auto-calculated from leverage)
+
+**hedge_config.json** (for manual CLI):
 - `symbol`: Base asset (e.g., "PAXG")
 - `quote`: Quote currency (default "USD")
 - `long_exchange`: Which exchange takes the long position ("edgex" or "lighter")
 - `short_exchange`: Which exchange takes the short position ("edgex" or "lighter")
 - `leverage`: Leverage to apply on both exchanges
-- `notional`: Default notional size in quote currency for `open` command (default: 40.0 USD)
+- `notional`: Default notional size in quote currency for `open` command
 
 **.env file** contains all exchange credentials (use `.env.example` as a template):
 
 **EdgeX credentials:**
 - `EDGEX_BASE_URL` (default: https://pro.edgex.exchange)
 - `EDGEX_WS_URL` (default: wss://quote.edgex.exchange)
-- `EDGEX_ACCOUNT_ID`
+- `EDGEX_ACCOUNT_ID` (**CRITICAL: Must be integer, not string**)
 - `EDGEX_STARK_PRIVATE_KEY`
 
 **Lighter credentials:**
@@ -70,7 +136,7 @@ python hedge_cli.py --config my_config.json open --size-quote 100
 - `ACCOUNT_INDEX` or `LIGHTER_ACCOUNT_INDEX` (default: 0)
 - `API_KEY_INDEX` or `LIGHTER_API_KEY_INDEX` (default: 0)
 
-**Note:** Margin mode is hardcoded to "cross" for delta-neutral hedging. A `.env.example` file is provided with placeholder values.
+**Note:** Margin mode is hardcoded to "cross" for delta-neutral hedging.
 
 ### Exchange Integration
 
@@ -80,7 +146,9 @@ python hedge_cli.py --config my_config.json open --size-quote 100
 - Position closing via offsetting aggressive limit orders
 - Capital retrieval from `get_account_asset()` endpoint
 - Funding rates from quote API and historical endpoint
-- **Note:** EdgeX-specific code is in `hedge_cli.py` (no separate connector module)
+- **Helper module:** `edgex_client.py` contains reusable functions
+- **CRITICAL:** `account_id` must be passed as `int`, not string (SDK uses bitwise operations)
+- **CRITICAL:** `contract_id` must be passed as `str` in `CreateOrderParams`
 
 **Lighter (lighter-python SDK)**:
 - Market identification by symbol
@@ -122,92 +190,6 @@ The `capacity` command calculates maximum delta-neutral position size:
 4. Max size = minimum of long and short venue capacities
 5. Rounds conservatively using both exchanges' tick sizes
 
-### Automated Rotation Bot: `lighter_edgex_hedge.py`
-
-**Primary production bot** that fully automates the funding arbitrage cycle. Runs continuously 24/7 to maximize profits.
-
-```bash
-# Run the bot (uses bot_config.json)
-python lighter_edgex_hedge.py
-
-# Run with custom config
-python lighter_edgex_hedge.py --config custom_config.json --state-file custom_state.json
-
-# Docker service (recommended for 24/7 operation)
-docker-compose up lighter_edgex_hedge
-```
-
-**Configuration file: `bot_config.json`**
-```json
-{
-  "symbols_to_monitor": ["BTC", "ETH", "SOL", "HYPE", ...],
-  "leverage": 3,
-  "notional_per_position": 320.0,
-  "hold_duration_hours": 8.0,
-  "wait_between_cycles_minutes": 5.0,
-  "check_interval_seconds": 300,
-  "min_net_apr_threshold": 5.0,
-  "enable_stop_loss": true,
-  "enable_pnl_tracking": true,
-  "enable_health_monitoring": true
-}
-```
-
-**Note on stop-loss:** When `enable_stop_loss: true`, the bot auto-calculates stop-loss percentage as `(100/leverage) * 0.7` safety margin. For 3x leverage: ~23.3%, for 4x: 17.5%, for 5x: 14.0%. You can manually override by adding `"stop_loss_percent": 25.0`.
-
-**State Machine Architecture:**
-1. **IDLE** → Waiting to start analysis
-2. **ANALYZING** → Fetching funding rates, selecting best opportunity
-3. **OPENING** → Executing delta-neutral position entry
-4. **HOLDING** → Monitoring position health, collecting funding
-5. **CLOSING** → Exiting both positions
-6. **WAITING** → Cooldown period before next cycle
-7. **ERROR** → Manual intervention required
-
-**Persistent State (`logs/bot_state.json`):**
-- `current_cycle`: Cycle counter (persists across restarts)
-- `current_position`: Active position details (symbol, sizing, entry prices, PnL)
-- `capital_status`: Real-time balance tracking on both exchanges
-- `completed_cycles`: Historical cycle records
-- `cumulative_stats`: Aggregate performance metrics
-
-**Key Features:**
-- **Automatic Recovery**: On restart, verifies actual positions match expected state
-- **Cycle Persistence**: Cycle counter stored in state file, survives restarts
-- **Real-time Monitoring**: Checks position health every `check_interval_seconds` (default: 300s/5min)
-- **Stop-Loss Protection**: Closes position if worst leg exceeds `stop_loss_percent` of notional
-- **Funding Rates Display**: Shows top 5 opportunities with current position highlighted
-- **Capital Tracking**: Monitors EdgeX total equity (includes positions) vs available balance
-- **PnL Calculation**: Manual computation for EdgeX (uses quote API), Lighter provides directly
-- **Graceful Shutdown**: CTRL+C completes current operation before exiting
-
-**Display Output (HOLDING state):**
-- Cycle number (e.g., "Cycle #1")
-- Position opened/target close timestamps
-- Time elapsed/remaining with progress percentage
-- EdgeX/Lighter/Total unrealized PnL (color-coded)
-- Available capital and max new position size
-- Funding rates comparison table (top 10, highlights current and best)
-
-**Display Output (STARTUP):**
-- Initial funding rate scan showing top 10 opportunities
-- Formatted table with Symbol, EdgeX APR, Lighter APR, Net APR, Long exchange
-- Color-coded markers: ★ BEST for highest APR, ◀ CURRENT for active position
-
-**Display Output (WAITING state):**
-- Completed cycles count
-- Next cycle number
-- Countdown timer with 30-second updates
-
-**Important Implementation Details:**
-- Uses `hedge_cli.py` functions for exchange operations (avoid duplication)
-- EdgeX capital: Must use `totalEquity` from `collateralAssetModelList` (not `amount`)
-- EdgeX PnL: Calculate manually using `(current_price × size) - open_value`
-- Lighter capital: WebSocket `user_stats/{account_index}` channel
-- State file updates after every operation for crash recovery
-- Cycle counter increments when position opens
-- State file location defaults to `logs/bot_state.json` but can be customized via `--state-file` argument or `BOT_STATE_FILE` environment variable
-
 ### Emergency Close: `emergency_close.py`
 
 **Critical safety tool** for immediately closing all open positions on both exchanges, regardless of configuration files or normal workflow.
@@ -227,57 +209,13 @@ echo CLOSE | docker-compose run emergency_close          # Auto-confirm
 docker-compose run emergency_close --cross-ticks 200     # Ultra-aggressive
 ```
 
-**Platform Detection:** The script automatically detects Windows and refuses to run, directing you to use Docker instead.
-
 **Key features:**
-- Independent of `hedge_config.json` - closes ANY open positions
+- Independent of config files - closes ANY open positions
 - Requires typing 'CLOSE' to confirm (safety measure)
 - Dry-run mode to inspect positions first
 - Configurable aggressiveness via `--cross-ticks` (default: 100)
-- Clear color-coded output showing positions and PnL
-- Works even if lighter_edgex_hedge or hedge_cli are stuck
-- **Uses `lighter_client.py` functions** for Lighter position fetching and closing
-- **EdgeX positions closed directly** using EdgeX SDK with aggressive limit orders
-
-**Use cases:**
-- Emergency exit when normal close commands fail
-- Liquidation risk mitigation
-- Quick exit during extreme volatility
-- Recovery from bot errors or unhedged positions
-
-**Important:** This script places market-crossing limit orders for immediate fills. Higher `cross_ticks` = faster execution but worse prices. Default of 100 ticks provides near-instant fills.
-
-### Liquidation Monitor: `examples/liquidation_monitor.py`
-
-Continuous monitoring service for delta-neutral position health (complementary to lighter_edgex_hedge). Located in `examples/` directory.
-
-```bash
-# Run with defaults (60s interval, 20% margin threshold)
-python examples/liquidation_monitor.py
-
-# Custom parameters
-python examples/liquidation_monitor.py --interval 30 --margin-threshold 15.0
-
-# Docker service (uncomment in docker-compose.yml first, then run)
-docker-compose up liquidation_monitor
-```
-
-**Key features:**
-- Monitors positions on both exchanges every N seconds
-- Checks margin ratio and unrealized PnL
-- Auto-closes positions if margin falls below threshold
-- Colored console output (green/yellow/red based on health)
-- Logs to `logs/liquidation_monitor.log` (DEBUG level)
-- Uses same configuration as `hedge_cli.py` (hedge_config.json + .env)
-
-**Margin calculation:**
-- EdgeX: Uses `marginRatio` from positions API (% of margin used)
-- Lighter: Uses `user_stats` WebSocket for available margin vs. total
-
-**Auto-close triggers:**
-- Margin ratio exceeds threshold (default: 80%)
-- Position becomes unhedged (only one side has position)
-- Critical errors fetching position data
+- Uses `lighter_client.py` and `edgex_client.py` functions for position closing
+- Works even if other scripts are stuck
 
 ## Environment Variables
 
@@ -300,39 +238,6 @@ The system supports flexible environment variable naming for Lighter exchange:
 **Auto-rotation bot specific**:
 - `BOT_STATE_FILE` - Override default state file location (default: `logs/bot_state.json`)
 - `PYTHONUNBUFFERED=1` - For real-time Docker logs
-
-## Example Bots
-
-All example bots are in the `examples/` directory:
-
-### `examples/edgex_trading_bot.py`
-Market maker for EdgeX with Avellaneda-Stoikov spread optimization:
-- Dynamic sizing based on capital usage ratio
-- Configurable leverage and spread parameters
-- Balance snapshot tracking
-- Optional volume limits
-
-### `examples/market_maker_v2.py`
-Advanced Lighter market maker with:
-- SuperTrend-based directional bias (flip logic)
-- Avellaneda parameter integration
-- WebSocket order book and account state tracking
-- Position management with dynamic sizing
-
-### `examples/market_maker.py` & `examples/market_maker_with_EMA.py`
-Additional market maker variations with different strategies
-
-### `examples/edgex_data_collector.py`
-Collects market data from EdgeX for analysis
-
-### `examples/gather_lighter_data.py`
-Collects market data from Lighter for analysis
-
-### `examples/check_markets.py`
-Utility to verify market availability on both exchanges
-
-### `examples/calculate_stoploss_by_leverage.py` & `examples/calculate_stoploss_extended.py`
-Utilities to calculate appropriate stop-loss percentages based on leverage
 
 ## Dependencies
 
@@ -363,16 +268,16 @@ cp .env.example .env
 # Edit .env with your API keys
 
 # 3. Test funding rates (no trading)
-python hedge_cli.py funding_all
+python examples/hedge_cli.py funding_all
 
 # 4. Check available capital
-python hedge_cli.py capacity
+python examples/hedge_cli.py capacity
 
 # 5. Run small test trade
-python hedge_cli.py test --notional 20
+python examples/hedge_cli.py test --notional 20
 
 # 6. Monitor existing positions
-python hedge_cli.py status
+python examples/hedge_cli.py status
 ```
 
 ### Testing Commands (Safe)
@@ -400,8 +305,7 @@ These commands are safe for testing and development:
 # 1. Edit production config
 nano bot_config.json
 
-# 2. Test in dry-run mode first
-python lighter_edgex_hedge.py --dry-run
+# 2. Test in dry-run mode first (if available)
 
 # 3. Run small position for first real cycle
 # (temporarily set notional_per_position to 50-100)
@@ -417,7 +321,7 @@ docker-compose logs -f lighter_edgex_hedge
 
 ## Docker Support
 
-All CLI commands are available as Docker services:
+All CLI commands are available as Docker services (most are commented out in docker-compose.yml):
 
 ```bash
 # Analysis commands
@@ -448,10 +352,11 @@ docker-compose run test --notional 50
 ### Code Architecture Principles
 
 1. **Modular architecture with function reuse**:
-   - `hedge_cli.py` contains all core exchange interaction functions (EdgeX + Lighter)
-   - `lighter_client.py` contains Lighter-specific helper functions (balance, positions, orders)
-   - `lighter_edgex_hedge.py` imports and reuses hedge_cli functions (no duplication)
-   - `emergency_close.py` imports and uses lighter_client functions for Lighter operations
+   - `edgex_client.py` contains all EdgeX-specific helper functions
+   - `lighter_client.py` contains all Lighter-specific helper functions
+   - `examples/hedge_cli.py` imports and uses both client modules for manual trading
+   - `lighter_edgex_hedge.py` imports and uses both client modules for automation
+   - `emergency_close.py` imports and uses both client modules for emergency operations
    - **Dual-client pattern**: Each operation initializes both exchange clients, performs actions, then closes connections
    - Clean separation: CLI logic vs bot state machine logic vs exchange helpers
 
@@ -485,6 +390,10 @@ docker-compose run test --notional 50
 - Capital query: Use `totalEquity` from `collateralAssetModelList` (includes position value)
 - PnL calculation: Manual computation using `(current_price × size) - open_value`
 - Position close: Detect size, send offsetting aggressive limit order
+- **CRITICAL BUG FIX (Jan 2025):** `account_id` must be `int(env["EDGEX_ACCOUNT_ID"])`, NOT string
+  - EdgeX SDK uses bitwise operations that fail with strings
+  - All EdgeXClient instantiations MUST use `int()` conversion
+- **CRITICAL:** In `CreateOrderParams`, `contract_id` must be `str(contract_id)` for the SDK
 
 **Lighter specifics:**
 - Market identification: Symbol only (e.g., "PAXG")
@@ -527,13 +436,12 @@ This ensures immediate fills without true market orders' unpredictability.
 ## Important Notes
 
 - The system uses aggressive limit orders (not true market orders) for better control
-- **Leverage is set on both exchanges before opening positions** with verification via `setup_leverage_both_exchanges()`
+- **Leverage is set on both exchanges before opening positions** with verification via `configure_leverage()`
 - **Position sizing ensures IDENTICAL sizes** on both exchanges by using the coarser tick size and flooring
 - Position size verification happens after opening to confirm both legs executed correctly
 - WebSocket connections are ephemeral - created per-query for capital checks, not persistent
 - Funding rate arbitrage is the primary profit mechanism for this delta-neutral strategy
-- The `funding` command auto-updates `hedge_config.json` if suboptimal configuration detected
-- **⚠️ WINDOWS LIMITATION:** The Lighter SDK only supports Linux/macOS. On Windows, ALL commands must be run via Docker (e.g., `docker-compose run close` instead of `python hedge_cli.py close`)
+- **⚠️ WINDOWS LIMITATION:** The Lighter SDK only supports Linux/macOS. On Windows, ALL commands must be run via Docker
 
 ## Troubleshooting
 
@@ -554,11 +462,6 @@ This ensures immediate fills without true market orders' unpredictability.
 - Retry logic built-in for transient failures
 - Check network connectivity and `LIGHTER_WS_URL` setting
 
-**"No funding rate data" errors:**
-- API timeout or rate limiting
-- Verify exchange API endpoints are accessible
-- Check for exchange maintenance windows
-
 **Unhedged position detected:**
 - One leg failed to execute or was manually closed
 - Bot enters ERROR state requiring manual intervention
@@ -571,27 +474,21 @@ This ensures immediate fills without true market orders' unpredictability.
 - Lower threshold or wait for better market conditions
 - Add more symbols to `symbols_to_monitor`
 
-**Docker container exits immediately:**
-- Check `.env` file exists and has valid credentials
-- View logs: `docker-compose logs lighter_edgex_hedge`
-- Verify configuration files are mounted correctly
-
-**Need to exit all positions immediately:**
-- Use `python emergency_close.py` for fastest exit
-- Independent of config files or bot state
-- Dry-run first: `python emergency_close.py --dry-run`
-- Increase urgency with `--cross-ticks 30` (faster but worse prices)
+**TypeError: unsupported operand type(s) for +: 'int' and 'str':**
+- This means `account_id` is being passed as a string to EdgeXClient
+- **FIX:** Always use `int(env["EDGEX_ACCOUNT_ID"])` when creating EdgeXClient
+- This was a critical bug fixed in January 2025
 
 ### Logging & Debugging
 
 **Console output:**
-- `hedge_cli.py`: WARNING level and above (clean output)
+- `examples/hedge_cli.py`: WARNING level and above (clean output)
 - `lighter_edgex_hedge.py`: INFO level, color-coded status
 
 **Log files:**
 - `hedge_cli.log`: DEBUG level, all hedge_cli operations
 - `logs/lighter_edgex_hedge.log`: DEBUG level, full bot activity
-- `logs/liquidation_monitor.log`: DEBUG level, position monitoring
+- `logs/liquidation_monitor.log`: DEBUG level, position monitoring (if running)
 
 **State inspection:**
 ```bash
@@ -607,6 +504,13 @@ tail -f hedge_cli.log
 
 ## Recent Improvements (2025)
 
+### Critical Bug Fixes (January 2025)
+- **Fixed EdgeX position closing bug**: `account_id` must be converted to `int` for EdgeX SDK
+  - Updated `emergency_close.py` to properly cast `account_id` to integer
+  - Updated `edgex_client.py` to ensure `contract_id` is passed as string in `CreateOrderParams`
+  - All EdgeXClient instantiations now correctly use `int(env["EDGEX_ACCOUNT_ID"])`
+- **Verified position closing consistency**: All systems use identical Lighter closing logic
+
 ### Position Size Consistency
 - Uses coarser tick size (larger of the two exchanges) to ensure identical position sizes
 - Verifies both exchanges will round to the same value before execution
@@ -614,42 +518,10 @@ tail -f hedge_cli.log
 - Prevents unhedged exposure from rounding mismatches
 
 ### Leverage Management
-- `setup_leverage_both_exchanges()` function sets leverage on both exchanges before opening
+- `configure_leverage()` function sets leverage on both exchanges before opening
 - EdgeX leverage verification via positions API (when position exists)
 - `test_leverage` command to verify leverage setup without trading
 - Clear warnings if leverage setup fails, but allows proceeding with caution
-
-### Enhanced Commands
-- `status`: Check current delta-neutral position status across both exchanges
-- `funding_all`: Compare funding rates across multiple markets simultaneously
-- `check_leverage`: Show max/default leverage for multiple markets on both exchanges
-- `test`: Complete open+close cycle with configurable notional ($20 default)
-- `test_auto`: Similar to `test` with automatic close after 5 seconds
-- `test_leverage`: Test leverage configuration without opening positions
-- `open` command: Now uses `notional` from config if no size arguments provided
-- All trading commands support `--cross-ticks N` parameter (default: 10)
-
-### Improved Error Handling
-- Position verification after opening and closing
-- Clear warnings for unhedged positions if one leg fails
-- Formatted output boxes for better readability
-- Detailed logging to `hedge_cli.log` (DEBUG+) with clean console (WARNING+)
-
-### Precision Fixes
-- All rounding functions now use Python's `Decimal` type for exact arithmetic
-- Eliminates floating-point precision errors like `0.059000000000000004`
-- Ensures exchange APIs receive properly formatted numeric strings
-
-### Execution Improvements
-- Default `cross_ticks` set to 100 for near-instant order fills
-- Minimizes timing risk between exchanges (critical for delta-neutral hedging)
-- Prioritizes execution speed over price improvement
-- User can still override with `--cross-ticks N` if needed
-
-### Configuration Simplification
-- `.env.example` file provided as template
-- Margin mode hardcoded to "cross" (removed from environment variables)
-- Simplified setup process for new users
 
 ### DateTime Handling (2025)
 - All datetime operations use timezone-aware UTC objects (`timezone.utc`)
@@ -660,13 +532,9 @@ tail -f hedge_cli.log
   - `from_iso_z()`: Parses ISO timestamps, handling malformed formats gracefully
 - Eliminated all timezone-naive datetime operations
 - Compatible with Python 3.7+ (uses `timezone.utc` instead of `datetime.UTC`)
-- No more deprecation warnings from `datetime.utcnow()`
 
-### Funding Rate Display
-- Funding rate comparison table now shown at three key points:
-  1. **Startup** - Initial scan of all symbols showing market landscape
-  2. **Before opening position** - Full comparison before selecting best opportunity
-  3. **During holding** - Real-time updates every check interval
-- Consistent table format across all displays
-- Color-coded status markers (★ BEST, ◀ CURRENT)
-- Shows top 10 opportunities by default
+### Execution Improvements
+- Default `cross_ticks` set to 100 for near-instant order fills
+- Minimizes timing risk between exchanges (critical for delta-neutral hedging)
+- Prioritizes execution speed over price improvement
+- User can still override with `--cross-ticks N` if needed
