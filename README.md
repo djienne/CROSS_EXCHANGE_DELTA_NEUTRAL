@@ -1,6 +1,6 @@
-# Cross-Exchange Delta-Neutral Hedging System
+# Cross-Exchange Delta Neutral on Lighter and edgeX DEXes
 
-**Automated 24/7 funding rate arbitrage bot** for EdgeX and Lighter cryptocurrency perpetual futures exchanges.
+**Automated 24/7 funding rate capture bot** for EdgeX and Lighter cryptocurrency perpetual futures exchanges.
 
 This system continuously monitors multiple markets, executes delta-neutral positions to capture funding rate differences, and automatically rotates them to maximize profit while maintaining market-neutral exposure and farming volume at low risk.
 
@@ -15,7 +15,7 @@ Referral link to support this work and get fee rebates: https://pro.edgex.exchan
 - 💥 **Crash Recovery & State Persistence**: Saves bot state, including cycle history and PnL. Can recover from restarts and reconcile existing positions.
 - 🖥️ **Real-time Monitoring**: A clean terminal dashboard shows the current position, PnL, available capital, and top funding opportunities.
 - 🚨 **Emergency Close Tool**: Standalone script to immediately close all positions on both exchanges, bypassing normal workflows for critical situations.
-- 🏗️ **Modular Architecture**: Clean separation between CLI tools (`hedge_cli.py`), automation bot (`lighter_edgex_hedge.py`), exchange helpers (`lighter_client.py`), and emergency tools (`emergency_close.py`).
+- 🏗️ **Modular Architecture**: Clean separation between CLI tools (`examples/hedge_cli.py`), automation bot (`lighter_edgex_hedge.py`), exchange helpers (`lighter_client.py`), and emergency tools (`emergency_close.py`).
 
 ## ⚠️ Important: Manual Fund Rebalancing
 
@@ -114,19 +114,19 @@ Use this tool for:
 
 The system consists of four main Python modules:
 
-- **`hedge_cli.py`** - Manual trading CLI tool
+- **`examples/hedge_cli.py`** - Manual trading CLI tool
   - Contains all core exchange interaction functions (EdgeX + Lighter)
   - Commands for opening, closing, checking capacity, funding rates, etc.
   - Used for manual trading and testing
 
 - **`lighter_edgex_hedge.py`** - Automated rotation bot
-  - 24/7 automated funding rate arbitrage bot
-  - Imports and reuses functions from `hedge_cli.py`
+  - 24/7 automated funding rate capture bot
+  - Imports and reuses functions from exchange client modules
   - State machine with persistent state in `logs/bot_state.json`
 
 - **`lighter_client.py`** - Lighter exchange helper functions
   - Reusable functions for Lighter operations (balance, positions, orders, closing)
-  - Used by both `hedge_cli.py` and `emergency_close.py`
+  - Used by both `examples/hedge_cli.py` and `emergency_close.py`
   - WebSocket-based balance and price fetching
 
 - **`emergency_close.py`** - Emergency position closer
@@ -177,9 +177,9 @@ The system consists of four main Python modules:
 </details>
 
 <details>
-<summary><b>🛠️ Manual Trading CLI (`hedge_cli.py`)</b></summary>
+<summary><b>🛠️ Manual Trading CLI (`examples/hedge_cli.py`)</b></summary>
 
-For manual analysis and trading, use `hedge_cli.py`. This tool is useful for testing or when you need direct control. It uses `hedge_config.json` for its parameters.
+For manual analysis and trading, use `examples/hedge_cli.py`. This tool is useful for testing or when you need direct control. It uses `hedge_config.json` for its parameters.
 
 **Key Commands:**
 
@@ -196,10 +196,10 @@ For manual analysis and trading, use `hedge_cli.py`. This tool is useful for tes
 **Example:**
 ```bash
 # Check funding for PAXG and auto-configure long/short exchanges
-python hedge_cli.py funding --config hedge_config.json
+python examples/hedge_cli.py funding --config hedge_config.json
 
 # Open a $100 position in the configured market
-python hedge_cli.py open --size-quote 100 --config hedge_config.json
+python examples/hedge_cli.py open --size-quote 100 --config hedge_config.json
 ```
 
 </details>
@@ -229,7 +229,7 @@ Other services for manual commands (`open`, `close`, `funding`, etc.) and the `l
 <summary><b>🎓 How It Works (Technical Summary)</b></summary>
 
 ### Strategy
-- **Funding Rate Arbitrage**: The bot shorts the exchange with a higher funding rate and longs the one with a lower rate, profiting from the difference while remaining price-neutral.
+- **Funding Rate Capture**: The bot shorts the exchange with a higher funding rate and longs the one with a lower rate, profiting from the difference while remaining price-neutral.
 - **Market Neutral**: Long and short positions cancel out price exposure - you profit from funding rates regardless of price movement.
 
 ### Position Sizing
