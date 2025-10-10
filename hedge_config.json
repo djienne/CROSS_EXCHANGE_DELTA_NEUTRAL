@@ -1,8 +1,0 @@
-{
-  "symbol": "HYPE",
-  "quote": "USD",
-  "long_exchange": "lighter",
-  "short_exchange": "edgex",
-  "leverage": 5,
-  "notional": 200
-}
