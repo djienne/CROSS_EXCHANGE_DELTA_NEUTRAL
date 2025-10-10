@@ -15,7 +15,7 @@ Referral link to support this work and get fee rebates: https://pro.edgex.exchan
 - 💥 **Crash Recovery & State Persistence**: Saves bot state, including cycle history and PnL. Can recover from restarts and reconcile existing positions.
 - 🖥️ **Real-time Monitoring**: A clean terminal dashboard shows the current position, PnL, available capital, and top funding opportunities.
 - 🚨 **Emergency Close Tool**: Standalone script to immediately close all positions on both exchanges, bypassing normal workflows for critical situations.
-- 🏗️ **Modular Architecture**: Clean separation between CLI tools (`examples/hedge_cli.py`), automation bot (`lighter_edgex_hedge.py`), exchange helpers (`lighter_client.py`), and emergency tools (`emergency_close.py`).
+- 🏗️ **Modular Architecture**: Clean separation between automation bot (`lighter_edgex_hedge.py`), exchange helpers (`lighter_client.py`, `edgex_client.py`), and emergency tools (`emergency_close.py`).
 
 ## ⚠️ Important: Manual Fund Rebalancing
 
@@ -112,12 +112,7 @@ Use this tool for:
 
 ## 📁 Code Structure
 
-The system consists of four main Python modules:
-
-- **`examples/hedge_cli.py`** - Manual trading CLI tool
-  - Contains all core exchange interaction functions (EdgeX + Lighter)
-  - Commands for opening, closing, checking capacity, funding rates, etc.
-  - Used for manual trading and testing
+The system consists of three main Python modules:
 
 - **`lighter_edgex_hedge.py`** - Automated rotation bot
   - 24/7 automated funding rate capture bot
@@ -126,8 +121,12 @@ The system consists of four main Python modules:
 
 - **`lighter_client.py`** - Lighter exchange helper functions
   - Reusable functions for Lighter operations (balance, positions, orders, closing)
-  - Used by both `examples/hedge_cli.py` and `emergency_close.py`
+  - Used by `lighter_edgex_hedge.py` and `emergency_close.py`
   - WebSocket-based balance and price fetching
+
+- **`edgex_client.py`** - EdgeX exchange helper functions
+  - Reusable functions for EdgeX operations (balance, positions, orders, closing)
+  - Used by `lighter_edgex_hedge.py` and `emergency_close.py`
 
 - **`emergency_close.py`** - Emergency position closer
   - Independent tool to close ALL positions immediately
@@ -136,7 +135,6 @@ The system consists of four main Python modules:
 
 **Configuration Files:**
 - `.env` - API credentials for both exchanges
-- `hedge_config.json` - Configuration for manual trading CLI
 - `bot_config.json` - Configuration for automated bot
 
 **Examples Directory:**
@@ -177,34 +175,6 @@ The system consists of four main Python modules:
 </details>
 
 <details>
-<summary><b>🛠️ Manual Trading CLI (`examples/hedge_cli.py`)</b></summary>
-
-For manual analysis and trading, use `examples/hedge_cli.py`. This tool is useful for testing or when you need direct control. It uses `hedge_config.json` for its parameters.
-
-**Key Commands:**
-
-| Command | Description |
-|---------|-------------|
-| `funding_all` | Compare funding rates across all markets |
-| `funding` | Check funding rates for the configured symbol |
-| `capacity` | Calculate max position size from available capital |
-| `status` | Check current position status on both exchanges |
-| `open` | Open a delta-neutral position |
-| `close` | Close both positions |
-| `test` | Run a small, self-closing test trade |
-
-**Example:**
-```bash
-# Check funding for PAXG and auto-configure long/short exchanges
-python examples/hedge_cli.py funding --config hedge_config.json
-
-# Open a $100 position in the configured market
-python examples/hedge_cli.py open --size-quote 100 --config hedge_config.json
-```
-
-</details>
-
-<details>
 <summary><b>🐳 Docker Details</b></summary>
 
 The `docker-compose.yml` is the easiest way to run the bot 24/7.
@@ -221,7 +191,7 @@ docker-compose logs -f lighter_edgex_hedge
 docker-compose stop lighter_edgex_hedge
 ```
 
-Other services for manual commands (`open`, `close`, `funding`, etc.) and the `liquidation_monitor` are included but commented out in `docker-compose.yml`. Uncomment them to use them via `docker-compose run <service_name>`.
+The `liquidation_monitor` service is included but commented out in `docker-compose.yml`. Uncomment it to use it via `docker-compose run liquidation_monitor`.
 
 </details>
 
