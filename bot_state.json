@@ -1,0 +1,87 @@
+{
+  "version": "1.0",
+  "state": "HOLDING",
+  "current_cycle": 0,
+  "current_position": {
+    "symbol": "FARTCOIN",
+    "quote": "USD",
+    "long_exchange": "edgex",
+    "short_exchange": "lighter",
+    "leverage": 4,
+    "opened_at": "2025-10-10T00:35:52.187520Z",
+    "target_close_at": "2025-10-10T12:35:52.187520Z",
+    "position_sizing": {
+      "configured_notional": 60.0,
+      "actual_notional": 59.653454249999996,
+      "max_edgex_notional": 59.653454249999996,
+      "max_lighter_notional": 59.653454249999996,
+      "limiting_exchange": "unknown",
+      "was_capital_limited": false,
+      "edgex_available_at_open": 616.546926,
+      "lighter_available_at_open": 557.34535
+    },
+    "entry": {
+      "edgex_contract_id": "10000083",
+      "lighter_market_id": "21",
+      "edgex_entry_price": 0.6392,
+      "lighter_entry_price": 0.639545,
+      "size_base": 93.3,
+      "edgex_size": 93.3,
+      "lighter_size": -93.3,
+      "edgex_balance_before": 631.4536044323564,
+      "lighter_balance_before": 572.262621,
+      "edgex_side": "long",
+      "lighter_side": "short",
+      "timestamp": "2025-10-10T00:35:52.187520Z"
+    },
+    "expected_funding": {
+      "edgex_rate_per_period": 0.005,
+      "lighter_rate_per_period": 0.0424,
+      "net_apr": 35.478,
+      "expected_duration_hours": 12.0
+    },
+    "recovered": true,
+    "current_pnl": {
+      "edgex_unrealized_pnl": -0.33588000000000306,
+      "lighter_unrealized_pnl": 0.296694,
+      "total_unrealized_pnl": -0.03918600000000305,
+      "timestamp": "2025-10-10T00:35:56.403399Z"
+    },
+    "time_elapsed_hours": 0.0011710744444444446,
+    "time_remaining_hours": 11.998828925555555,
+    "progress_percent": 0.009758953703703705,
+    "last_check": "2025-10-10T00:35:58.213585Z"
+  },
+  "capital_status": {
+    "edgex_total": 631.4722732636825,
+    "edgex_available": 616.560928,
+    "lighter_total": 572.241162,
+    "lighter_available": 557.318527,
+    "total_capital": 1203.7134352636826,
+    "total_available": 1173.879455,
+    "max_position_notional": 2229.274108,
+    "limiting_exchange": "Lighter",
+    "timestamp": "2025-10-10T00:35:58.217522Z",
+    "last_updated": "2025-10-10T00:35:58.217522Z",
+    "initial_total_capital": 1203.7059624323565
+  },
+  "completed_cycles": [],
+  "cumulative_stats": {
+    "total_cycles": 0,
+    "successful_cycles": 0,
+    "failed_cycles": 0,
+    "total_realized_pnl": 0.0,
+    "total_trading_pnl": 0.0,
+    "total_funding_pnl": 0.0,
+    "total_fees_paid": 0.0,
+    "best_cycle_pnl": 0.0,
+    "worst_cycle_pnl": 0.0,
+    "total_volume_traded": 0.0,
+    "total_hold_time_hours": 0.0,
+    "by_symbol": {},
+    "last_error": null,
+    "last_error_at": null
+  },
+  "config": null,
+  "last_updated": "2025-10-10T00:36:00.051294Z"
+}

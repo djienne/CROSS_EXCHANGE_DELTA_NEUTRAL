@@ -6,14 +6,11 @@ networks:
       config:
         - subnet: 172.58.96.0/22
 services:
-  auto_rotation_bot:
+  lighter_edgex_hedge:
     build: .
-    command: python -u auto_rotation_bot.py
+    command: python -u lighter_edgex_hedge.py
     volumes:
-      - ./rotation_bot_config.json:/app/rotation_bot_config.json
-      - ./hedge_cli.py:/app/hedge_cli.py
-      - ./auto_rotation_bot.py:/app/auto_rotation_bot.py
-      - ./logs:/app/logs
+      - ./:/app/
     env_file:
       - .env
     restart: unless-stopped
@@ -84,7 +81,7 @@ services:
 
   # close:
   #   build: .
-  #   command: python hedge_cli.py close
+  #   command: python hedge_cli.py close --cross-ticks 200
   #   volumes:
   #     - ./hedge_config.json:/app/hedge_config.json
   #     - ./hedge_cli.py:/app/hedge_cli.py
@@ -136,5 +133,16 @@ services:
   #     - .env
   #   restart: unless-stopped
 
-  # # --- Automated Trading Services ---
+  # --- Emergency Services ---
+  # emergency_close:
+  #   build: .
+  #   entrypoint: ["python", "emergency_close.py"]
+  #   volumes:
+  #     - ./emergency_close.py:/app/emergency_close.py
+  #     - ./hedge_cli.py:/app/hedge_cli.py
+  #     - ./hedge_config.json:/app/hedge_config.json
+  #   env_file:
+  #     - .env
+  #   stdin_open: true
+  #   tty: true
 

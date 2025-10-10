@@ -1,0 +1,29 @@
+{
+  "symbols_to_monitor": [
+    "BTC",
+    "ETH",
+    "SOL",
+    "BNB",
+    "ASTER",
+    "PAXG",
+    "DOGE",
+    "XRP",
+    "LINK",
+    "HYPE",
+    "PUMP",
+    "FARTCOIN",
+    "XPL"
+  ],
+  "quote": "USD",
+  "leverage": 4,
+  "notional_per_position": 60.0,
+  "comment_":"notional_per_position is Maximum possible, will adjust to actual available capital",
+  "hold_duration_hours": 12.0,
+  "wait_between_cycles_minutes": 5.0,
+  "check_interval_seconds": 300,
+  "min_net_apr_threshold": 5.0,
+  "comment2_":"stop_loss is auto-calculated based on leverage with 0.7 safety margin",
+  "enable_stop_loss": true,
+  "enable_pnl_tracking": true,
+  "enable_health_monitoring": true
+}
