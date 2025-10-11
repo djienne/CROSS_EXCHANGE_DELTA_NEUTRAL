@@ -10,10 +10,14 @@ Referral link to support this work and get fee rebates: https://pro.edgex.exchan
 
 - 🤖 **Fully Automated 24/7 Trading**: The `lighter_edgex_hedge.py` runs continuously, requiring no manual intervention.
 - 📈 **Intelligent Market Selection**: Analyzes a user-defined list of markets and always opens a position in the one with the highest net funding APR.
+- 🔍 **Multi-Tier Market Filtering**: Automatically filters out unsuitable markets based on:
+  - **Volume**: Minimum $250M 24h trading volume (configurable)
+  - **Spread**: Maximum 0.15% cross-exchange price spread (configurable)
+  - **APR**: Minimum 5% net funding APR (configurable)
 - 🔄 **Automatic Position Rotation**: Opens a delta-neutral position, holds it for a configurable duration (e.g., 8 hours) to collect funding, then closes and rotates to the next best opportunity.
 - 🛡️ **Stop-Loss Protection**: Automatically closes positions if a leg's loss exceeds a defined percentage of the notional value.
 - 💥 **Crash Recovery & State Persistence**: Saves bot state, including cycle history and PnL. Can recover from restarts and reconcile existing positions.
-- 🖥️ **Real-time Monitoring**: A clean terminal dashboard shows the current position, PnL, available capital, and top funding opportunities.
+- 🖥️ **Real-time Monitoring**: A clean terminal dashboard shows the current position, PnL, available capital, and top funding opportunities with spread and volume data.
 - 🚨 **Emergency Close Tool**: Standalone script to immediately close all positions on both exchanges, bypassing normal workflows for critical situations.
 - 🏗️ **Modular Architecture**: Clean separation between automation bot (`lighter_edgex_hedge.py`), exchange helpers (`lighter_client.py`, `edgex_client.py`), and emergency tools (`emergency_close.py`).
 
@@ -57,6 +61,7 @@ Edit `bot_config.json` to define your strategy.
   "hold_duration_hours": 8.0,
   "min_net_apr_threshold": 5.0,
   "min_volume_usd": 250000000,
+  "max_spread_pct": 0.15,
   "stop_loss_percent": 25.0
 }
 ```
@@ -64,6 +69,7 @@ Edit `bot_config.json` to define your strategy.
 - `notional_per_position`: Max position size. The bot uses the lesser of this value or your available capital.
 - `leverage`: Recommended: 3-5x.
 - `min_volume_usd`: Minimum combined 24h volume in USD (default: $250M). Filters out low-liquidity pairs.
+- `max_spread_pct`: Maximum cross-exchange mid price spread (default: 0.15%). Filters out pairs with excessive price discrepancy.
 - `stop_loss_percent`: Safety threshold. Recommended: 25% for 3x leverage.
 
 ### 4. Run the Bot
@@ -165,6 +171,7 @@ The system consists of three main Python modules:
 | `check_interval_seconds` | number | `300` | How often to check position health while holding (seconds, default: 5 minutes) |
 | `min_net_apr_threshold` | number | `5.0` | Minimum net APR required to open a position (%) |
 | `min_volume_usd` | number | `250000000` | Minimum combined 24h trading volume in USD (default: $250M) to filter low-liquidity pairs |
+| `max_spread_pct` | number | `0.15` | Maximum allowed cross-exchange spread (%) between mid prices. Filters out pairs with excessive price discrepancy |
 | `stop_loss_percent` | number | `25.0` | Stop-loss threshold as % of position notional (triggers on either leg) |
 | `enable_stop_loss` | boolean | `true` | Enable automatic stop-loss protection |
 
@@ -270,14 +277,35 @@ docker-compose up -d liquidation_monitor
 
 ## 🆕 Recent Improvements
 
+**Cross-Exchange Spread Filtering (January 2025)**
+- **Automatic spread monitoring**: Bot now calculates the mid price spread between EdgeX and Lighter for each symbol
+- **Configurable threshold**: Default maximum spread of 0.15% prevents trading pairs with excessive price discrepancy
+- **Real-time spread display**: Funding rate tables show current spread percentage for all symbols
+  - Available symbols display spread in the new "Spread" column
+  - Excluded symbols show "✗ EXCLUDED: Spread too wide: X.XXX% > 0.15%" status
+- **Why it matters**: Large spreads indicate pricing inefficiencies that could lead to poor execution or slippage
+  - Prevents entering positions where exchanges have significantly different valuations
+  - Reduces risk of immediate losses from price convergence
+  - Ensures better fill prices on both legs of the delta-neutral position
+- **Customizable via config**: Set `max_spread_pct` in `bot_config.json` (e.g., 0.20 for 0.20% max spread)
+- **Three-tier filtering system**: Bot now filters opportunities by:
+  1. Volume threshold (min $250M default)
+  2. Spread threshold (max 0.15% default)
+  3. Net APR threshold (min 5% default)
+
 **Rate Limit Handling & API Optimization (January 2025)**
+- **Global concurrency limiting**: Global semaphore limits max 2 concurrent Lighter API calls system-wide
+  - Prevents overwhelming Lighter's API with too many simultaneous requests
+  - All Lighter API calls (funding, volume, spread) serialized through this bottleneck
+  - Combined with staggered delays ensures smooth, rate-limit-free operation
 - **Intelligent retry logic**: Automatic exponential backoff with jitter when hitting API rate limits (HTTP 429)
   - Retries up to 3 times for funding rate fetches, 2 times for volume data
   - Initial delay: 1-2 seconds, increases exponentially with random jitter
   - Prevents rate limit cascades and improves reliability
-- **Staggered API requests**: 0.5-second delay between symbol fetches (spread 12 symbols over ~6 seconds)
+- **Staggered API requests**: 1.0-second delay between symbol fetches (spread 12 symbols over ~12 seconds)
   - Significantly reduces rate limit risk compared to concurrent requests
   - Applied to both position selection and monitoring phases
+  - EdgeX calls remain concurrent (no rate limits), only Lighter calls are throttled
 - **Smart startup optimization**: Skips initial funding scan when bot restarts in HOLDING state
   - Saves 24-36 API calls on restart while holding a position
   - Only scans on startup when in IDLE/WAITING states (when needed)

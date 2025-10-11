@@ -140,6 +140,12 @@ async def retry_with_backoff(
         raise last_exception
 
 
+# ==================== Global Rate Limiting ====================
+
+# Global semaphore to limit concurrent Lighter API calls
+# This prevents overwhelming Lighter's API with too many concurrent requests
+LIGHTER_API_SEMAPHORE = asyncio.Semaphore(2)  # Max 2 concurrent Lighter API calls
+
 # ==================== Logging Setup ====================
 
 os.makedirs('logs', exist_ok=True)
@@ -240,6 +246,7 @@ class BotConfig:
     check_interval_seconds: int = 60
     min_net_apr_threshold: float = 5.0
     min_volume_usd: float = 250_000_000  # Minimum 24h combined volume in USD (default: $250M)
+    max_spread_pct: float = 0.15  # Maximum cross-exchange spread percentage (default: 0.15%)
     enable_stop_loss: bool = True
     enable_pnl_tracking: bool = True
     enable_health_monitoring: bool = True
@@ -265,6 +272,7 @@ class BotConfig:
                 'check_interval_seconds': 60,
                 'min_net_apr_threshold': 5.0,
                 'min_volume_usd': 250_000_000,
+                'max_spread_pct': 0.15,
                 'enable_stop_loss': True,
                 'enable_pnl_tracking': True,
                 'enable_health_monitoring': True
@@ -456,6 +464,79 @@ async def configure_leverage(
     return edgex_success, lighter_success
 
 
+async def fetch_symbol_spread(symbol: str, quote: str, env: dict) -> Optional[float]:
+    """
+    Fetch mid prices from both exchanges and calculate cross-exchange spread percentage.
+
+    Returns:
+        Spread percentage (e.g., 0.15 for 0.15%), or None if unavailable
+    """
+
+    async def fetch_edgex_mid() -> Optional[float]:
+        client = None
+        try:
+            client = EdgeXClient(
+                base_url=env["EDGEX_BASE_URL"],
+                account_id=int(env["EDGEX_ACCOUNT_ID"]) if env.get("EDGEX_ACCOUNT_ID") else 0,
+                stark_private_key=env.get("EDGEX_STARK_PRIVATE_KEY", ""),
+            )
+            contract_name = f"{symbol.upper()}{quote.upper()}"
+            contract_id, _, _ = await edgex_client.get_edgex_contract_details(client, contract_name)
+            best_bid, best_ask = await edgex_client.get_edgex_best_bid_ask(client, contract_id)
+
+            if best_bid and best_ask:
+                return (best_bid + best_ask) / 2
+            elif best_bid or best_ask:
+                return best_bid if best_bid else best_ask
+            return None
+        except Exception as e:
+            logger.debug(f"Error fetching EdgeX mid price for {symbol}: {e}")
+            return None
+        finally:
+            if client and hasattr(client, 'internal_client'):
+                try:
+                    await client.internal_client.close()
+                except Exception:
+                    pass
+
+    async def fetch_lighter_mid() -> Optional[float]:
+        api_client = None
+        try:
+            # Use global semaphore to limit concurrent Lighter API calls
+            async with LIGHTER_API_SEMAPHORE:
+                api_client = lighter.ApiClient(configuration=lighter.Configuration(host=env["LIGHTER_BASE_URL"]))
+                order_api = lighter.OrderApi(api_client)
+                market_id, _, _ = await lighter_client.get_lighter_market_details(order_api, symbol)
+                best_bid, best_ask = await lighter_client.get_lighter_best_bid_ask(order_api, symbol, market_id, timeout=10.0)
+
+                if best_bid and best_ask:
+                    return (best_bid + best_ask) / 2
+                elif best_bid or best_ask:
+                    return best_bid if best_bid else best_ask
+                return None
+        except Exception as e:
+            logger.debug(f"Error fetching Lighter mid price for {symbol}: {e}")
+            return None
+        finally:
+            if api_client:
+                try:
+                    await api_client.close()
+                except Exception:
+                    pass
+
+    edgex_mid, lighter_mid = await asyncio.gather(fetch_edgex_mid(), fetch_lighter_mid())
+
+    if edgex_mid is None or lighter_mid is None:
+        return None
+
+    # Calculate cross-exchange spread percentage
+    price_diff = abs(edgex_mid - lighter_mid)
+    avg_mid = (edgex_mid + lighter_mid) / 2
+    spread_pct = (price_diff / avg_mid) * 100
+
+    return spread_pct
+
+
 async def fetch_symbol_volume(symbol: str, quote: str, env: dict) -> Tuple[Optional[float], Optional[float], Optional[float]]:
     """
     Fetch 24h trading volume for a symbol from both exchanges.
@@ -514,19 +595,21 @@ async def fetch_symbol_volume(symbol: str, quote: str, env: dict) -> Tuple[Optio
     async def fetch_lighter_volume() -> Optional[float]:
         api_client = None
         try:
-            api_client = lighter.ApiClient(configuration=lighter.Configuration(host=env["LIGHTER_BASE_URL"]))
-            order_api = lighter.OrderApi(api_client)
+            # Use global semaphore to limit concurrent Lighter API calls
+            async with LIGHTER_API_SEMAPHORE:
+                api_client = lighter.ApiClient(configuration=lighter.Configuration(host=env["LIGHTER_BASE_URL"]))
+                order_api = lighter.OrderApi(api_client)
 
-            # Wrap API call with retry logic
-            async def _fetch():
-                stats_response = await order_api.exchange_stats()
-                # Find the market by symbol
-                for market_stats in stats_response.order_book_stats:
-                    if market_stats.symbol.upper() == symbol.upper():
-                        return float(market_stats.daily_quote_token_volume)
-                return None
+                # Wrap API call with retry logic
+                async def _fetch():
+                    stats_response = await order_api.exchange_stats()
+                    # Find the market by symbol
+                    for market_stats in stats_response.order_book_stats:
+                        if market_stats.symbol.upper() == symbol.upper():
+                            return float(market_stats.daily_quote_token_volume)
+                    return None
 
-            return await retry_with_backoff(_fetch, max_retries=2, initial_delay=1.0)
+                return await retry_with_backoff(_fetch, max_retries=2, initial_delay=1.0)
         except RateLimitError as e:
             logger.warning(f"Lighter volume rate limit for {symbol} after retries: {e}")
             return None
@@ -553,7 +636,7 @@ async def fetch_symbol_volume(symbol: str, quote: str, env: dict) -> Tuple[Optio
     return edgex_vol, lighter_vol, total_vol
 
 
-async def fetch_symbol_funding(symbol: str, quote: str, env: dict, check_volume: bool = True, min_volume_usd: float = 250_000_000) -> dict:
+async def fetch_symbol_funding(symbol: str, quote: str, env: dict, check_volume: bool = True, min_volume_usd: float = 250_000_000, max_spread_pct: float = 0.15) -> dict:
     """
     Fetch funding rates and volume for a single symbol across both venues.
 
@@ -563,6 +646,7 @@ async def fetch_symbol_funding(symbol: str, quote: str, env: dict, check_volume:
         env: Environment variables
         check_volume: Whether to check volume threshold (default: True)
         min_volume_usd: Minimum combined 24h volume in USD (default: $250M)
+        max_spread_pct: Maximum cross-exchange spread percentage (default: 0.15%)
     """
     logger.info("Checking funding for %s...", symbol)
 
@@ -593,16 +677,18 @@ async def fetch_symbol_funding(symbol: str, quote: str, env: dict, check_volume:
     async def fetch_lighter_rate() -> Optional[float]:
         api_client = None
         try:
-            api_client = lighter.ApiClient(configuration=lighter.Configuration(host=env["LIGHTER_BASE_URL"]))
-            order_api = lighter.OrderApi(api_client)
-            market_id, _, _ = await lighter_client.get_lighter_market_details(order_api, symbol)
-            funding_api = lighter.FundingApi(api_client)
+            # Use global semaphore to limit concurrent Lighter API calls
+            async with LIGHTER_API_SEMAPHORE:
+                api_client = lighter.ApiClient(configuration=lighter.Configuration(host=env["LIGHTER_BASE_URL"]))
+                order_api = lighter.OrderApi(api_client)
+                market_id, _, _ = await lighter_client.get_lighter_market_details(order_api, symbol)
+                funding_api = lighter.FundingApi(api_client)
 
-            # Wrap the actual API call with retry logic
-            async def _fetch():
-                return await lighter_client.get_lighter_funding_rate(funding_api, market_id)
+                # Wrap the actual API call with retry logic
+                async def _fetch():
+                    return await lighter_client.get_lighter_funding_rate(funding_api, market_id)
 
-            return await retry_with_backoff(_fetch, max_retries=3, initial_delay=2.0)
+                return await retry_with_backoff(_fetch, max_retries=3, initial_delay=2.0)
         except RateLimitError as exc:
             logger.error("Lighter rate limit exceeded for %s after retries: %s", symbol, exc)
             return None
@@ -613,16 +699,23 @@ async def fetch_symbol_funding(symbol: str, quote: str, env: dict, check_volume:
             if api_client:
                 await api_client.close()
 
-    # Fetch funding rates and volume concurrently
+    # Fetch funding rates, volume, and spread
+    # EdgeX calls can run concurrently (no rate limits)
+    # Lighter calls are serialized via global LIGHTER_API_SEMAPHORE
     if check_volume:
-        edgex_rate_decimal, lighter_rate_decimal, volume_data = await asyncio.gather(
+        edgex_rate_decimal, lighter_rate_decimal, volume_data, spread_pct = await asyncio.gather(
             fetch_edgex_rate(),
             fetch_lighter_rate(),
-            fetch_symbol_volume(symbol, quote, env)
+            fetch_symbol_volume(symbol, quote, env),
+            fetch_symbol_spread(symbol, quote, env)
         )
         edgex_volume, lighter_volume, total_volume = volume_data
     else:
-        edgex_rate_decimal, lighter_rate_decimal = await asyncio.gather(fetch_edgex_rate(), fetch_lighter_rate())
+        edgex_rate_decimal, lighter_rate_decimal, spread_pct = await asyncio.gather(
+            fetch_edgex_rate(),
+            fetch_lighter_rate(),
+            fetch_symbol_spread(symbol, quote, env)
+        )
         edgex_volume, lighter_volume, total_volume = None, None, None
 
     if edgex_rate_decimal is None or lighter_rate_decimal is None:
@@ -638,6 +731,7 @@ async def fetch_symbol_funding(symbol: str, quote: str, env: dict, check_volume:
             "edgex_volume": edgex_volume,
             "lighter_volume": lighter_volume,
             "total_volume": total_volume,
+            "spread_pct": spread_pct,
         }
 
     # Check volume data availability if volume check is enabled
@@ -651,6 +745,7 @@ async def fetch_symbol_funding(symbol: str, quote: str, env: dict, check_volume:
                 "edgex_volume": edgex_volume,
                 "lighter_volume": lighter_volume,
                 "total_volume": total_volume,
+                "spread_pct": spread_pct,
             }
 
         # Check volume threshold
@@ -663,6 +758,20 @@ async def fetch_symbol_funding(symbol: str, quote: str, env: dict, check_volume:
                 "edgex_volume": edgex_volume,
                 "lighter_volume": lighter_volume,
                 "total_volume": total_volume,
+                "spread_pct": spread_pct,
+            }
+
+        # Check spread threshold
+        if spread_pct is not None and spread_pct > max_spread_pct:
+            logger.info(f"{symbol}: Spread {spread_pct:.3f}% exceeds {max_spread_pct:.2f}% threshold")
+            return {
+                "symbol": symbol,
+                "available": False,
+                "missing_on": [f"Spread too wide: {spread_pct:.3f}% > {max_spread_pct:.2f}%"],
+                "edgex_volume": edgex_volume,
+                "lighter_volume": lighter_volume,
+                "total_volume": total_volume,
+                "spread_pct": spread_pct,
             }
 
     edgex_apr = _calculate_apr(edgex_rate_decimal, 6)
@@ -693,6 +802,7 @@ async def fetch_symbol_funding(symbol: str, quote: str, env: dict, check_volume:
         "edgex_volume": edgex_volume,
         "lighter_volume": lighter_volume,
         "total_volume": total_volume,
+        "spread_pct": spread_pct,
     }
 
 
@@ -1777,7 +1887,7 @@ async def open_best_position(state_mgr: StateManager, env: dict, config: BotConf
 
         try:
             return await asyncio.wait_for(
-                fetch_symbol_funding(symbol, config.quote, env, check_volume=True, min_volume_usd=config.min_volume_usd),
+                fetch_symbol_funding(symbol, config.quote, env, check_volume=True, min_volume_usd=config.min_volume_usd, max_spread_pct=config.max_spread_pct),
                 timeout=timeout
             )
         except asyncio.TimeoutError:
@@ -1790,9 +1900,11 @@ async def open_best_position(state_mgr: StateManager, env: dict, config: BotConf
             logger.warning(f"{symbol}: Error fetching funding - {str(e)[:50]}")
             return {"symbol": symbol, "available": False, "error": str(e)[:50]}
 
-    # Add staggered delays: 0.5s between each request to avoid rate limits
-    # This spreads 12 symbols over 6 seconds instead of hitting all at once
-    stagger_delay = 0.5
+    # Add staggered delays: 1.0s between each request to avoid rate limits
+    # Combined with global LIGHTER_API_SEMAPHORE (max 2 concurrent), this ensures
+    # we never overwhelm Lighter's API with too many concurrent requests
+    # Example: 12 symbols over 12 seconds with max 2 concurrent Lighter calls
+    stagger_delay = 1.0
     results = await asyncio.gather(*[
         fetch_with_timeout(symbol, delay=idx * stagger_delay)
         for idx, symbol in enumerate(config.symbols_to_monitor)
@@ -2190,9 +2302,9 @@ def display_funding_table(funding_data: List[dict], excluded_data: List[dict] = 
         return
 
     logger.info(f"\n{Colors.BOLD}📊 Funding Rates Overview{Colors.RESET}")
-    logger.info(f"{Colors.CYAN}{'─' * 105}{Colors.RESET}")
-    logger.info(f"{'Symbol':<10} {'EdgeX APR':>10} {'Lighter APR':>12} {'Net APR':>10} {'24h Volume':>14} {'Long':>8} {'Status':<25}")
-    logger.info(f"{Colors.GRAY}{'-' * 105}{Colors.RESET}")
+    logger.info(f"{Colors.CYAN}{'─' * 120}{Colors.RESET}")
+    logger.info(f"{'Symbol':<10} {'EdgeX APR':>10} {'Lighter APR':>12} {'Net APR':>10} {'24h Volume':>14} {'Spread':>9} {'Long':>8} {'Status':<25}")
+    logger.info(f"{Colors.GRAY}{'-' * 120}{Colors.RESET}")
 
     best_symbol = funding_data[0].get('symbol') if funding_data else None
 
@@ -2204,6 +2316,7 @@ def display_funding_table(funding_data: List[dict], excluded_data: List[dict] = 
         net_apr = data.get('net_apr', 0)
         long_exch = data.get('long_exch', 'N/A')
         total_volume = data.get('total_volume')
+        spread_pct = data.get('spread_pct')
 
         # Format volume
         if total_volume is not None:
@@ -2216,6 +2329,12 @@ def display_funding_table(funding_data: List[dict], excluded_data: List[dict] = 
         else:
             volume_str = "N/A"
 
+        # Format spread
+        if spread_pct is not None:
+            spread_str = f"{spread_pct:.3f}%"
+        else:
+            spread_str = "N/A"
+
         # Color code based on status
         status = ""
         color = Colors.RESET
@@ -2226,14 +2345,15 @@ def display_funding_table(funding_data: List[dict], excluded_data: List[dict] = 
             status = "★ BEST"
             color = Colors.GREEN
 
-        logger.info(f"{color}{symbol:<10} {edgex_apr:>9.2f}% {lighter_apr:>11.2f}% {net_apr:>9.2f}% {volume_str:>14} {long_exch:>8} {status:<25}{Colors.RESET}")
+        logger.info(f"{color}{symbol:<10} {edgex_apr:>9.2f}% {lighter_apr:>11.2f}% {net_apr:>9.2f}% {volume_str:>14} {spread_str:>9} {long_exch:>8} {status:<25}{Colors.RESET}")
 
     # Display excluded symbols (grayed out)
     if excluded_data:
-        logger.info(f"{Colors.GRAY}{'-' * 105}{Colors.RESET}")
+        logger.info(f"{Colors.GRAY}{'-' * 120}{Colors.RESET}")
         for data in excluded_data:
             symbol = data.get('symbol', 'N/A')
             total_volume = data.get('total_volume')
+            spread_pct = data.get('spread_pct')
             missing_on = data.get('missing_on', [])
 
             # Format volume
@@ -2247,6 +2367,12 @@ def display_funding_table(funding_data: List[dict], excluded_data: List[dict] = 
             else:
                 volume_str = "N/A"
 
+            # Format spread
+            if spread_pct is not None:
+                spread_str = f"{spread_pct:.3f}%"
+            else:
+                spread_str = "N/A"
+
             # Determine exclusion reason
             if missing_on and isinstance(missing_on, list) and len(missing_on) > 0:
                 reason = missing_on[0]
@@ -2254,15 +2380,17 @@ def display_funding_table(funding_data: List[dict], excluded_data: List[dict] = 
                     status = f"✗ EXCLUDED: Volume N/A"
                 elif "Volume too low" in reason or "volume" in reason.lower():
                     status = f"✗ EXCLUDED: {reason}"
+                elif "Spread too wide" in reason or "spread" in reason.lower():
+                    status = f"✗ EXCLUDED: {reason}"
                 else:
                     status = f"✗ UNAVAILABLE: {', '.join(missing_on)}"
             else:
                 status = "✗ UNAVAILABLE"
 
             # Show excluded symbols in gray with N/A for rates
-            logger.info(f"{Colors.GRAY}{symbol:<10} {'N/A':>10} {'N/A':>12} {'N/A':>10} {volume_str:>14} {'N/A':>8} {status:<25}{Colors.RESET}")
+            logger.info(f"{Colors.GRAY}{symbol:<10} {'N/A':>10} {'N/A':>12} {'N/A':>10} {volume_str:>14} {spread_str:>9} {'N/A':>8} {status:<25}{Colors.RESET}")
 
-    logger.info(f"{Colors.GRAY}{'-' * 105}{Colors.RESET}")
+    logger.info(f"{Colors.GRAY}{'-' * 120}{Colors.RESET}")
 
     # Show comparison if current is not best
     if current_symbol and best_symbol and current_symbol != best_symbol:
@@ -2975,7 +3103,7 @@ class RotationBot:
                                 try:
                                     return await asyncio.wait_for(
                                         # Enable volume checking for monitoring display
-                                        fetch_symbol_funding(symbol, config.quote, self.env, check_volume=True, min_volume_usd=config.min_volume_usd),
+                                        fetch_symbol_funding(symbol, config.quote, self.env, check_volume=True, min_volume_usd=config.min_volume_usd, max_spread_pct=config.max_spread_pct),
                                         timeout=timeout
                                     )
                                 except asyncio.TimeoutError:

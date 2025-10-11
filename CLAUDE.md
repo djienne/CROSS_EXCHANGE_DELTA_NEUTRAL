@@ -119,6 +119,7 @@ python examples/hedge_cli.py --config my_config.json open --size-quote 100
 - `hold_duration_hours`: How long to hold each position before closing
 - `min_net_apr_threshold`: Minimum net APR required to open a position (%)
 - `min_volume_usd`: Minimum combined 24h trading volume in USD (default: $250M) - filters out low-liquidity pairs
+- `max_spread_pct`: Maximum cross-exchange mid price spread (default: 0.15%) - filters out pairs with excessive price discrepancy
 - `enable_stop_loss`: Enable automatic stop-loss (auto-calculated from leverage)
 
 **hedge_config.json** (for manual CLI):
@@ -201,6 +202,27 @@ The `capacity` command calculates maximum delta-neutral position size:
 5. Rounds conservatively using both exchanges' tick sizes
 
 ### Utility Scripts
+
+**`check_spread.py`** - Cross-exchange spread checker:
+```bash
+# Check spread for current position (reads from bot_state.json)
+python check_spread.py
+```
+- Fetches real-time mid prices from both exchanges for the active position
+- Calculates individual exchange spreads (bid-ask) and cross-exchange spread
+- Shows price changes since position entry
+- Useful for monitoring price convergence/divergence
+
+**`check_all_spreads.py`** - Multi-symbol spread analysis:
+```bash
+# Check spreads for all symbols in bot_config.json
+python check_all_spreads.py
+```
+- Fetches mid prices for all monitored symbols
+- Displays sorted table with spread percentages
+- Highlights which exchange has higher price
+- Shows average, max, and min spreads across all symbols
+- Staggered API requests (1 second delay for Lighter) to avoid rate limits
 
 **`check_volume.py`** - Volume comparison utility:
 ```bash
@@ -434,13 +456,18 @@ docker-compose run test --notional 50
    - WARNING-level logging for volume fetch failures to aid debugging
 
 8. **Rate limit handling pattern** (lighter_edgex_hedge.py):
+   - **Global semaphore (`LIGHTER_API_SEMAPHORE`)**: Limits max 2 concurrent Lighter API calls system-wide
+     - All Lighter API calls must acquire semaphore before executing
+     - Prevents overwhelming API even with many concurrent symbol fetches
+     - Applies to funding rates, volume data, and spread calculations
    - `RateLimitError` exception class for specific rate limit error detection
    - `is_rate_limit_error()`: Detects HTTP 429, "Too Many Requests", code 23000, or "rate limit" in error messages
    - `retry_with_backoff()`: Generic async retry function with exponential backoff and jitter
      - Configurable max_retries, initial_delay, backoff_factor, max_delay
      - Random jitter prevents thundering herd problem
      - Re-raises RateLimitError after all retries exhausted
-   - Staggered delays (0.5s) between symbol fetches to prevent concurrent API bombardment
+   - Staggered delays (1.0s) between symbol fetches to prevent concurrent API bombardment
+   - EdgeX calls remain concurrent (no rate limits), only Lighter calls are throttled
    - Smart startup optimization: skip funding scan when bot is already HOLDING
 
 ### Critical Implementation Details
@@ -541,11 +568,12 @@ This ensures immediate fills without true market orders' unpredictability.
 - This was a critical bug fixed in January 2025
 
 **API rate limit errors (HTTP 429 / "Too Many Requests"):**
-- Bot now automatically retries with exponential backoff (up to 3 times for funding, 2 times for volume)
-- Staggered delays (0.5s between symbols) prevent concurrent rate limit hits
-- If seeing persistent rate limits:
+- Bot now uses **global semaphore** limiting max 2 concurrent Lighter API calls
+- Automatically retries with exponential backoff (up to 3 times for funding, 2 times for volume)
+- Staggered delays (1.0s between symbols) prevent concurrent rate limit hits
+- EdgeX calls remain concurrent (no rate limits), only Lighter calls are throttled
+- If seeing persistent rate limits (should be extremely rare now):
   - Check WARNING-level logs for specific failure patterns
-  - Increase stagger delay in code if needed (currently 0.5s)
   - Verify API quotas haven't been exceeded on exchange side
   - Consider reducing number of `symbols_to_monitor` temporarily
 - Volume showing N/A: Usually transient rate limit issue, will retry automatically
@@ -576,7 +604,25 @@ tail -f hedge_cli.log
 
 ## Recent Improvements (2025)
 
+### Cross-Exchange Spread Filtering (January 2025)
+- **New spread monitoring feature**: Bot calculates mid price spread between exchanges for each symbol
+- **Configurable filtering**: `max_spread_pct` in bot_config.json (default: 0.15%)
+- **Three-tier filtering system**:
+  1. Volume threshold (min $250M combined volume)
+  2. Spread threshold (max 0.15% price discrepancy)
+  3. Net APR threshold (min 5% funding rate difference)
+- **Implementation details**:
+  - `fetch_symbol_spread()`: Calculates spread percentage between exchange mid prices
+  - Spread data included in funding rate tables with new "Spread" column
+  - Excluded symbols show "✗ EXCLUDED: Spread too wide: X.XXX% > 0.15%"
+- **Why it matters**: Prevents trading on pairs with pricing inefficiencies that could lead to poor execution
+
 ### Rate Limit Handling & API Optimization (January 2025)
+- **Global concurrency limiting**: `LIGHTER_API_SEMAPHORE` limits max 2 concurrent Lighter API calls system-wide
+  - All Lighter API calls (funding, volume, spread) must acquire semaphore before executing
+  - Prevents overwhelming Lighter's API with too many simultaneous requests
+  - Combined with staggered delays ensures smooth, rate-limit-free operation
+  - EdgeX calls remain concurrent (no rate limits), only Lighter calls are throttled
 - **Intelligent retry logic with exponential backoff**: Automatic recovery from API rate limits (HTTP 429)
   - `retry_with_backoff()` function with configurable max retries, initial delay, backoff factor, and jitter
   - Funding rate fetches: 3 retries, 2s initial delay
@@ -584,10 +630,10 @@ tail -f hedge_cli.log
   - Exponential backoff with random jitter prevents thundering herd problem
   - Specific `RateLimitError` exception class for clear error handling
   - Errors logged at WARNING level for visibility
-- **Staggered API requests**: 0.5-second delay between symbol fetches
-  - Spreads 12 symbols over ~6 seconds instead of concurrent bombardment
+- **Staggered API requests**: 1.0-second delay between symbol fetches
+  - Spreads 12 symbols over ~12 seconds instead of concurrent bombardment
   - Implemented in both `open_best_position()` (ANALYZING) and monitoring (HOLDING)
-  - Significantly reduces rate limit risk (2.5x less aggressive than 0.2s delay)
+  - Combined with global semaphore ensures maximum 2 Lighter API calls at any time
 - **Smart startup optimization**: Skips initial funding scan when bot is already HOLDING
   - Saves 24-36 API calls on restart (2-3 calls per symbol × 12 symbols)
   - Only performs startup scan when in IDLE/WAITING states
