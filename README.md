@@ -270,11 +270,29 @@ docker-compose up -d liquidation_monitor
 
 ## 🆕 Recent Improvements
 
+**Rate Limit Handling & API Optimization (January 2025)**
+- **Intelligent retry logic**: Automatic exponential backoff with jitter when hitting API rate limits (HTTP 429)
+  - Retries up to 3 times for funding rate fetches, 2 times for volume data
+  - Initial delay: 1-2 seconds, increases exponentially with random jitter
+  - Prevents rate limit cascades and improves reliability
+- **Staggered API requests**: 0.5-second delay between symbol fetches (spread 12 symbols over ~6 seconds)
+  - Significantly reduces rate limit risk compared to concurrent requests
+  - Applied to both position selection and monitoring phases
+- **Smart startup optimization**: Skips initial funding scan when bot restarts in HOLDING state
+  - Saves 24-36 API calls on restart while holding a position
+  - Only scans on startup when in IDLE/WAITING states (when needed)
+- **Enhanced error visibility**: Volume fetch failures now logged at WARNING level for easier debugging
+- **Data validation**: Bot prevents opening positions when volume data is unavailable (N/A)
+  - Shows "✗ EXCLUDED: Volume N/A" status for symbols with missing volume data
+  - Ensures all trades have verified liquidity before execution
+
 **Volume Filtering (January 2025)**
 - **Automatic liquidity filtering**: Bot now checks 24h trading volume from both exchanges before selecting positions
 - **Configurable threshold**: Default minimum of $250M combined volume (EdgeX + Lighter) to avoid illiquid markets
-- **Real-time volume display**: Funding rate table now shows current 24h volume for each symbol
-- **Smart filtering**: Volume check applied during position selection but disabled for informational displays
+- **Real-time volume display**: Funding rate tables show current 24h volume for all symbols
+  - Displayed during startup (if not HOLDING), position selection (ANALYZING), and monitoring (HOLDING)
+  - Human-readable format: `$2.4B`, `$495M`, `$150M`, etc.
+- **Smart filtering**: Volume check enabled during position selection, with retry logic for failed fetches
 - **Customizable via config**: Set `min_volume_usd` in `bot_config.json` to your preferred threshold
 - Prevents positions in low-liquidity pairs that could have wide spreads or execution issues
 

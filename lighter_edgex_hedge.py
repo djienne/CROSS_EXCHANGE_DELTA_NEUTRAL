@@ -63,6 +63,83 @@ class BalanceFetchError(Exception):
     pass
 
 
+class RateLimitError(Exception):
+    """Raised when API rate limit is hit."""
+    pass
+
+
+# ==================== Rate Limit Handling ====================
+
+def is_rate_limit_error(exc: Exception) -> bool:
+    """Check if an exception is a rate limit error (HTTP 429)."""
+    error_str = str(exc)
+    return (
+        "429" in error_str or
+        "Too Many Requests" in error_str or
+        "code\":23000" in error_str or
+        "rate limit" in error_str.lower()
+    )
+
+
+async def retry_with_backoff(
+    func,
+    max_retries: int = 3,
+    initial_delay: float = 1.0,
+    backoff_factor: float = 2.0,
+    max_delay: float = 30.0,
+    jitter: bool = True
+):
+    """
+    Retry an async function with exponential backoff on rate limit errors.
+
+    Args:
+        func: Async function to retry
+        max_retries: Maximum number of retry attempts
+        initial_delay: Initial delay in seconds
+        backoff_factor: Multiplier for each retry (exponential backoff)
+        max_delay: Maximum delay between retries
+        jitter: Add random jitter to prevent thundering herd
+    """
+    import random
+
+    last_exception = None
+
+    for attempt in range(max_retries + 1):
+        try:
+            return await func()
+        except Exception as exc:
+            last_exception = exc
+
+            # Check if it's a rate limit error
+            if not is_rate_limit_error(exc):
+                # Not a rate limit error, raise immediately
+                raise
+
+            # If this was the last attempt, raise
+            if attempt >= max_retries:
+                logger.error(f"Rate limit retry exhausted after {max_retries} attempts")
+                raise RateLimitError(f"Rate limit exceeded after {max_retries} retries: {exc}") from exc
+
+            # Calculate delay with exponential backoff
+            delay = min(initial_delay * (backoff_factor ** attempt), max_delay)
+
+            # Add jitter (randomize ±25% to prevent synchronized retries)
+            if jitter:
+                jitter_range = delay * 0.25
+                delay = delay + random.uniform(-jitter_range, jitter_range)
+
+            logger.warning(
+                f"Rate limit hit (attempt {attempt + 1}/{max_retries}), "
+                f"retrying in {delay:.1f}s... Error: {str(exc)[:100]}"
+            )
+
+            await asyncio.sleep(delay)
+
+    # Should never reach here, but just in case
+    if last_exception:
+        raise last_exception
+
+
 # ==================== Logging Setup ====================
 
 os.makedirs('logs', exist_ok=True)
@@ -406,18 +483,26 @@ async def fetch_symbol_volume(symbol: str, quote: str, env: dict) -> Tuple[Optio
                     break
 
             if not contract_id:
+                logger.warning(f"EdgeX contract not found for {symbol}{quote}")
                 return None
 
-            quote_data = await client.quote.get_24_hour_quote(contract_id)
-            if quote_data.get("code") == "SUCCESS" and quote_data.get("data"):
-                record = quote_data["data"][0]
-                # EdgeX uses 'value' field for 24h volume in quote currency
-                for field in ["value", "volume24h", "volume"]:
-                    if field in record and record[field]:
-                        return float(record[field])
+            # Wrap API call with retry logic
+            async def _fetch():
+                quote_data = await client.quote.get_24_hour_quote(contract_id)
+                if quote_data.get("code") == "SUCCESS" and quote_data.get("data"):
+                    record = quote_data["data"][0]
+                    # EdgeX uses 'value' field for 24h volume in quote currency
+                    for field in ["value", "volume24h", "volume", "volume24H", "quoteVolume"]:
+                        if field in record and record[field]:
+                            return float(record[field])
+                return None
+
+            return await retry_with_backoff(_fetch, max_retries=2, initial_delay=1.0)
+        except RateLimitError as e:
+            logger.warning(f"EdgeX volume rate limit for {symbol} after retries: {e}")
             return None
         except Exception as e:
-            logger.debug(f"Error fetching EdgeX volume for {symbol}: {e}")
+            logger.warning(f"Error fetching EdgeX volume for {symbol}: {e}")
             return None
         finally:
             if client and hasattr(client, 'internal_client'):
@@ -432,17 +517,21 @@ async def fetch_symbol_volume(symbol: str, quote: str, env: dict) -> Tuple[Optio
             api_client = lighter.ApiClient(configuration=lighter.Configuration(host=env["LIGHTER_BASE_URL"]))
             order_api = lighter.OrderApi(api_client)
 
-            # Get exchange statistics which includes daily volume per market
-            stats_response = await order_api.exchange_stats()
+            # Wrap API call with retry logic
+            async def _fetch():
+                stats_response = await order_api.exchange_stats()
+                # Find the market by symbol
+                for market_stats in stats_response.order_book_stats:
+                    if market_stats.symbol.upper() == symbol.upper():
+                        return float(market_stats.daily_quote_token_volume)
+                return None
 
-            # Find the market by symbol
-            for market_stats in stats_response.order_book_stats:
-                if market_stats.symbol.upper() == symbol.upper():
-                    return float(market_stats.daily_quote_token_volume)
-
+            return await retry_with_backoff(_fetch, max_retries=2, initial_delay=1.0)
+        except RateLimitError as e:
+            logger.warning(f"Lighter volume rate limit for {symbol} after retries: {e}")
             return None
         except Exception as e:
-            logger.debug(f"Error fetching Lighter volume for {symbol}: {e}")
+            logger.warning(f"Error fetching Lighter volume for {symbol}: {e}")
             return None
         finally:
             if api_client:
@@ -508,7 +597,15 @@ async def fetch_symbol_funding(symbol: str, quote: str, env: dict, check_volume:
             order_api = lighter.OrderApi(api_client)
             market_id, _, _ = await lighter_client.get_lighter_market_details(order_api, symbol)
             funding_api = lighter.FundingApi(api_client)
-            return await lighter_client.get_lighter_funding_rate(funding_api, market_id)
+
+            # Wrap the actual API call with retry logic
+            async def _fetch():
+                return await lighter_client.get_lighter_funding_rate(funding_api, market_id)
+
+            return await retry_with_backoff(_fetch, max_retries=3, initial_delay=2.0)
+        except RateLimitError as exc:
+            logger.error("Lighter rate limit exceeded for %s after retries: %s", symbol, exc)
+            return None
         except Exception as exc:
             logger.error("Error fetching Lighter funding for %s: %s", symbol, exc)
             return None
@@ -543,8 +640,20 @@ async def fetch_symbol_funding(symbol: str, quote: str, env: dict, check_volume:
             "total_volume": total_volume,
         }
 
-    # Check volume threshold if enabled
-    if check_volume and total_volume is not None:
+    # Check volume data availability if volume check is enabled
+    if check_volume:
+        if total_volume is None:
+            logger.info(f"{symbol}: Volume data unavailable (N/A)")
+            return {
+                "symbol": symbol,
+                "available": False,
+                "missing_on": ["Volume data unavailable"],
+                "edgex_volume": edgex_volume,
+                "lighter_volume": lighter_volume,
+                "total_volume": total_volume,
+            }
+
+        # Check volume threshold
         if total_volume < min_volume_usd:
             logger.info(f"{symbol}: Volume ${total_volume/1e6:.1f}M below threshold ${min_volume_usd/1e6:.0f}M")
             return {
@@ -1659,9 +1768,13 @@ async def open_best_position(state_mgr: StateManager, env: dict, config: BotConf
     logger.info(f"Analyzing funding rates for {len(config.symbols_to_monitor)} symbols...")
     state_mgr.set_state(BotState.ANALYZING)
 
-    # Fetch funding rates for all symbols with per-symbol timeouts
-    async def fetch_with_timeout(symbol: str, timeout: float = 90.0):
-        """Fetch funding for a symbol with individual timeout."""
+    # Fetch funding rates for all symbols with per-symbol timeouts and staggered delays
+    async def fetch_with_timeout(symbol: str, delay: float = 0.0, timeout: float = 90.0):
+        """Fetch funding for a symbol with individual timeout and optional delay."""
+        # Add stagger delay to prevent rate limit hits
+        if delay > 0:
+            await asyncio.sleep(delay)
+
         try:
             return await asyncio.wait_for(
                 fetch_symbol_funding(symbol, config.quote, env, check_volume=True, min_volume_usd=config.min_volume_usd),
@@ -1670,17 +1783,24 @@ async def open_best_position(state_mgr: StateManager, env: dict, config: BotConf
         except asyncio.TimeoutError:
             logger.warning(f"{symbol}: Funding rate fetch timed out after {timeout}s")
             return {"symbol": symbol, "available": False, "error": "timeout"}
+        except RateLimitError as e:
+            logger.warning(f"{symbol}: Rate limit exceeded even after retries - {str(e)[:50]}")
+            return {"symbol": symbol, "available": False, "error": "rate_limit"}
         except Exception as e:
             logger.warning(f"{symbol}: Error fetching funding - {str(e)[:50]}")
             return {"symbol": symbol, "available": False, "error": str(e)[:50]}
 
+    # Add staggered delays: 0.5s between each request to avoid rate limits
+    # This spreads 12 symbols over 6 seconds instead of hitting all at once
+    stagger_delay = 0.5
     results = await asyncio.gather(*[
-        fetch_with_timeout(symbol)
-        for symbol in config.symbols_to_monitor
+        fetch_with_timeout(symbol, delay=idx * stagger_delay)
+        for idx, symbol in enumerate(config.symbols_to_monitor)
     ], return_exceptions=True)
 
-    # Filter available symbols and sort by net APR
+    # Separate available and unavailable symbols
     available = [r for r in results if isinstance(r, dict) and r.get("available", False)]
+    unavailable = [r for r in results if isinstance(r, dict) and not r.get("available", False)]
 
     if not available:
         logger.error("No symbols available on both exchanges!")
@@ -1690,11 +1810,11 @@ async def open_best_position(state_mgr: StateManager, env: dict, config: BotConf
         state_mgr.save()
         return False
 
-    # Sort by net APR descending
+    # Sort available by net APR descending
     available.sort(key=lambda x: x["net_apr"], reverse=True)
 
-    # Display funding rates table
-    display_funding_table(available, current_symbol=None, limit=10)
+    # Display funding rates table (show both available and excluded symbols)
+    display_funding_table(available, unavailable, current_symbol=None, limit=10)
 
     # Filter by minimum APR threshold
     candidates = [r for r in available if r["net_apr"] >= config.min_net_apr_threshold]
@@ -2063,19 +2183,20 @@ async def close_current_position(state_mgr: StateManager, env: dict):
 
 # ==================== Display Functions ====================
 
-def display_funding_table(funding_data: List[dict], current_symbol: Optional[str] = None, limit: int = 10):
-    """Display funding rates comparison table with volume information."""
-    if not funding_data:
+def display_funding_table(funding_data: List[dict], excluded_data: List[dict] = None, current_symbol: Optional[str] = None, limit: int = 10):
+    """Display funding rates comparison table with volume information and excluded symbols."""
+    if not funding_data and not excluded_data:
         logger.info(f"{Colors.GRAY}No funding data available{Colors.RESET}")
         return
 
-    logger.info(f"\n{Colors.BOLD}📊 Funding Rates Overview (Top {min(limit, len(funding_data))}){Colors.RESET}")
-    logger.info(f"{Colors.CYAN}{'─' * 90}{Colors.RESET}")
-    logger.info(f"{'Symbol':<10} {'EdgeX APR':>10} {'Lighter APR':>12} {'Net APR':>10} {'Volume':>12} {'Long':>8} {'Status':<15}")
-    logger.info(f"{Colors.GRAY}{'-' * 90}{Colors.RESET}")
+    logger.info(f"\n{Colors.BOLD}📊 Funding Rates Overview{Colors.RESET}")
+    logger.info(f"{Colors.CYAN}{'─' * 105}{Colors.RESET}")
+    logger.info(f"{'Symbol':<10} {'EdgeX APR':>10} {'Lighter APR':>12} {'Net APR':>10} {'24h Volume':>14} {'Long':>8} {'Status':<25}")
+    logger.info(f"{Colors.GRAY}{'-' * 105}{Colors.RESET}")
 
     best_symbol = funding_data[0].get('symbol') if funding_data else None
 
+    # Display available symbols (sorted by net APR)
     for idx, data in enumerate(funding_data[:limit]):
         symbol = data.get('symbol', 'N/A')
         edgex_apr = data.get('edgex_apr', 0)
@@ -2105,9 +2226,43 @@ def display_funding_table(funding_data: List[dict], current_symbol: Optional[str
             status = "★ BEST"
             color = Colors.GREEN
 
-        logger.info(f"{color}{symbol:<10} {edgex_apr:>9.2f}% {lighter_apr:>11.2f}% {net_apr:>9.2f}% {volume_str:>12} {long_exch:>8} {status:<15}{Colors.RESET}")
+        logger.info(f"{color}{symbol:<10} {edgex_apr:>9.2f}% {lighter_apr:>11.2f}% {net_apr:>9.2f}% {volume_str:>14} {long_exch:>8} {status:<25}{Colors.RESET}")
 
-    logger.info(f"{Colors.GRAY}{'-' * 90}{Colors.RESET}")
+    # Display excluded symbols (grayed out)
+    if excluded_data:
+        logger.info(f"{Colors.GRAY}{'-' * 105}{Colors.RESET}")
+        for data in excluded_data:
+            symbol = data.get('symbol', 'N/A')
+            total_volume = data.get('total_volume')
+            missing_on = data.get('missing_on', [])
+
+            # Format volume
+            if total_volume is not None:
+                if total_volume >= 1_000_000_000:
+                    volume_str = f"${total_volume/1e9:.2f}B"
+                elif total_volume >= 1_000_000:
+                    volume_str = f"${total_volume/1e6:.0f}M"
+                else:
+                    volume_str = f"${total_volume/1e3:.0f}K"
+            else:
+                volume_str = "N/A"
+
+            # Determine exclusion reason
+            if missing_on and isinstance(missing_on, list) and len(missing_on) > 0:
+                reason = missing_on[0]
+                if "Volume data unavailable" in reason:
+                    status = f"✗ EXCLUDED: Volume N/A"
+                elif "Volume too low" in reason or "volume" in reason.lower():
+                    status = f"✗ EXCLUDED: {reason}"
+                else:
+                    status = f"✗ UNAVAILABLE: {', '.join(missing_on)}"
+            else:
+                status = "✗ UNAVAILABLE"
+
+            # Show excluded symbols in gray with N/A for rates
+            logger.info(f"{Colors.GRAY}{symbol:<10} {'N/A':>10} {'N/A':>12} {'N/A':>10} {volume_str:>14} {'N/A':>8} {status:<25}{Colors.RESET}")
+
+    logger.info(f"{Colors.GRAY}{'-' * 105}{Colors.RESET}")
 
     # Show comparison if current is not best
     if current_symbol and best_symbol and current_symbol != best_symbol:
@@ -2551,38 +2706,48 @@ class RotationBot:
             logger.error(f"{Colors.RED}State recovery failed. Exiting.{Colors.RESET}")
             return
 
-        # Display initial funding rates at startup
-        logger.info(f"\n{Colors.CYAN}{'═' * 70}")
-        logger.info(f"INITIAL FUNDING RATE SCAN")
-        logger.info(f"{'═' * 70}{Colors.RESET}\n")
-
-        # Fetch funding rates for startup display
-        async def fetch_with_timeout(symbol: str, timeout: float = 90.0):
-            """Fetch funding for a symbol with individual timeout."""
-            try:
-                return await asyncio.wait_for(
-                    # Disable volume checking for informational display
-                    fetch_symbol_funding(symbol, config.quote, self.env, check_volume=False),
-                    timeout=timeout
-                )
-            except asyncio.TimeoutError:
-                return {"symbol": symbol, "available": False, "error": "timeout"}
-            except Exception:
-                return {"symbol": symbol, "available": False}
-
-        startup_results = await asyncio.gather(*[
-            fetch_with_timeout(symbol)
-            for symbol in config.symbols_to_monitor
-        ], return_exceptions=True)
-
-        startup_funding = [r for r in startup_results if isinstance(r, dict) and r.get("available", False)]
-        if startup_funding:
-            startup_funding.sort(key=lambda x: x.get("net_apr", 0), reverse=True)
-            display_funding_table(startup_funding, current_symbol=None, limit=10)
+        # Skip initial funding scan if already HOLDING a position (saves API quota)
+        current_state = self.state_mgr.get_state()
+        if current_state == BotState.HOLDING:
+            logger.info(f"\n{Colors.CYAN}Already holding position, skipping initial funding scan to conserve API quota{Colors.RESET}\n")
         else:
-            logger.warning("Unable to fetch funding rates at startup")
+            # Display initial funding rates at startup
+            logger.info(f"\n{Colors.CYAN}{'═' * 70}")
+            logger.info(f"INITIAL FUNDING RATE SCAN")
+            logger.info(f"{'═' * 70}{Colors.RESET}\n")
 
-        logger.info(f"{Colors.CYAN}{'═' * 70}{Colors.RESET}\n")
+            # Fetch funding rates for startup display
+            async def fetch_with_timeout(symbol: str, timeout: float = 90.0):
+                """Fetch funding for a symbol with individual timeout."""
+                try:
+                    return await asyncio.wait_for(
+                        # Disable volume checking for informational display
+                        fetch_symbol_funding(symbol, config.quote, self.env, check_volume=False),
+                        timeout=timeout
+                    )
+                except asyncio.TimeoutError:
+                    return {"symbol": symbol, "available": False, "error": "timeout"}
+                except Exception:
+                    return {"symbol": symbol, "available": False}
+
+            startup_results = await asyncio.gather(*[
+                fetch_with_timeout(symbol)
+                for symbol in config.symbols_to_monitor
+            ], return_exceptions=True)
+
+            startup_available = [r for r in startup_results if isinstance(r, dict) and r.get("available", False)]
+            startup_excluded = [r for r in startup_results if isinstance(r, dict) and not r.get("available", False)]
+
+            if startup_available:
+                startup_available.sort(key=lambda x: x.get("net_apr", 0), reverse=True)
+                display_funding_table(startup_available, startup_excluded, current_symbol=None, limit=10)
+            elif startup_excluded:
+                # Show excluded symbols even if no available ones
+                display_funding_table([], startup_excluded, current_symbol=None, limit=10)
+            else:
+                logger.warning("Unable to fetch funding rates at startup")
+
+            logger.info(f"{Colors.CYAN}{'═' * 70}{Colors.RESET}\n")
 
         # Main loop
         while not self.shutdown_requested:
@@ -2796,17 +2961,21 @@ class RotationBot:
 
                         # Display funding rates table
                         logger.info(f"\n{Colors.BOLD}📊 Funding Rates Overview{Colors.RESET}")
-                        logger.info(f"{Colors.CYAN}{'─' * 70}{Colors.RESET}")
+                        logger.info(f"{Colors.CYAN}{'─' * 90}{Colors.RESET}")
 
                         try:
                             # Fetch current funding rates for all monitored symbols
                             # Each symbol has its own 90-second timeout to prevent blocking
-                            async def fetch_with_timeout(symbol: str, timeout: float = 90.0):
-                                """Fetch funding for a symbol with individual timeout."""
+                            async def fetch_with_timeout(symbol: str, delay: float = 0.0, timeout: float = 90.0):
+                                """Fetch funding for a symbol with individual timeout and staggered delay."""
+                                # Add stagger delay to prevent rate limit hits
+                                if delay > 0:
+                                    await asyncio.sleep(delay)
+
                                 try:
                                     return await asyncio.wait_for(
-                                        # Disable volume checking for monitoring display
-                                        fetch_symbol_funding(symbol, config.quote, self.env, check_volume=False),
+                                        # Enable volume checking for monitoring display
+                                        fetch_symbol_funding(symbol, config.quote, self.env, check_volume=True, min_volume_usd=config.min_volume_usd),
                                         timeout=timeout
                                     )
                                 except asyncio.TimeoutError:
@@ -2816,10 +2985,11 @@ class RotationBot:
                                     logger.warning(f"{symbol}: Error fetching funding - {str(e)[:50]}")
                                     return {"symbol": symbol, "available": False, "error": str(e)[:50]}
 
-                            # Fetch all symbols concurrently with individual timeouts
+                            # Fetch all symbols with staggered delays to avoid rate limits
+                            stagger_delay = 0.5
                             funding_results = await asyncio.gather(*[
-                                fetch_with_timeout(symbol)
-                                for symbol in config.symbols_to_monitor
+                                fetch_with_timeout(symbol, delay=idx * stagger_delay)
+                                for idx, symbol in enumerate(config.symbols_to_monitor)
                             ], return_exceptions=True)
 
                             # Filter successful results
@@ -2836,9 +3006,9 @@ class RotationBot:
                                 current_symbol = pos.get('symbol')
                                 best_symbol = funding_data[0].get('symbol') if funding_data else None
 
-                                # Display table header
-                                logger.info(f"{'Symbol':<10} {'EdgeX APR':>10} {'Lighter APR':>12} {'Net APR':>10} {'Status':<15}")
-                                logger.info(f"{Colors.GRAY}{'-' * 70}{Colors.RESET}")
+                                # Display table header with volume column
+                                logger.info(f"{'Symbol':<10} {'EdgeX APR':>10} {'Lighter APR':>12} {'Net APR':>10} {'24h Volume':>14} {'Status':<15}")
+                                logger.info(f"{Colors.GRAY}{'-' * 90}{Colors.RESET}")
 
                                 # Show top 5 opportunities
                                 for idx, data in enumerate(funding_data[:5]):
@@ -2846,6 +3016,18 @@ class RotationBot:
                                     edgex_apr = data.get('edgex_apr', 0)
                                     lighter_apr = data.get('lighter_apr', 0)
                                     net_apr = data.get('net_apr', 0)
+                                    total_volume = data.get('total_volume')
+
+                                    # Format volume
+                                    if total_volume is not None:
+                                        if total_volume >= 1_000_000_000:
+                                            volume_str = f"${total_volume/1e9:.2f}B"
+                                        elif total_volume >= 1_000_000:
+                                            volume_str = f"${total_volume/1e6:.0f}M"
+                                        else:
+                                            volume_str = f"${total_volume/1e3:.0f}K"
+                                    else:
+                                        volume_str = "N/A"
 
                                     # Color code based on status
                                     status = ""
@@ -2857,9 +3039,9 @@ class RotationBot:
                                         status = "★ BEST"
                                         color = Colors.GREEN
 
-                                    logger.info(f"{color}{symbol:<10} {edgex_apr:>9.2f}% {lighter_apr:>11.2f}% {net_apr:>9.2f}% {status:<15}{Colors.RESET}")
+                                    logger.info(f"{color}{symbol:<10} {edgex_apr:>9.2f}% {lighter_apr:>11.2f}% {net_apr:>9.2f}% {volume_str:>14} {status:<15}{Colors.RESET}")
 
-                                logger.info(f"{Colors.GRAY}{'-' * 70}{Colors.RESET}")
+                                logger.info(f"{Colors.GRAY}{'-' * 90}{Colors.RESET}")
 
                                 # Show summary if current position is not the best
                                 if current_symbol and best_symbol and current_symbol != best_symbol:
@@ -2875,7 +3057,7 @@ class RotationBot:
                             logger.info(f"{Colors.YELLOW}Error fetching funding rates: {str(e)[:100]}{Colors.RESET}")
                             logger.info(f"{Colors.GRAY}Funding rates unavailable{Colors.RESET}")
 
-                        logger.info(f"{Colors.CYAN}{'─' * 70}{Colors.RESET}\n")
+                        logger.info(f"{Colors.CYAN}{'─' * 90}{Colors.RESET}\n")
 
                         # Sleep until next check
                         await self._interruptible_sleep(config.check_interval_seconds)

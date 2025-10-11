@@ -62,7 +62,8 @@ docker-compose logs -f lighter_edgex_hedge
 - Bot fetches 24h trading volume from both exchanges concurrently with funding rates
 - Filters out symbols below `min_volume_usd` threshold (default: $250M combined)
 - Funding rate comparison table displays volume in human-readable format ($2.4B, $495M, etc.)
-- Volume check strategically disabled for informational displays (startup, monitoring)
+- Volume check now enabled in monitoring (HOLDING) state for real-time opportunity assessment
+- Skip startup scan when already HOLDING to conserve API quota (saves 24-36 calls)
 
 **Persistent State (`logs/bot_state.json`):**
 - `current_cycle`: Cycle counter (persists across restarts)
@@ -427,8 +428,20 @@ docker-compose run test --notional 50
 7. **Volume filtering pattern** (lighter_edgex_hedge.py):
    - `fetch_symbol_volume(symbol, quote, env)`: Concurrent fetch from both exchanges
    - `fetch_symbol_funding()`: Now fetches both funding rates AND volume data
-   - Strategic `check_volume` parameter: enabled for position selection, disabled for info displays
+   - Strategic `check_volume` parameter: enabled for position selection and monitoring, disabled only for startup when HOLDING
    - Volume data cached and passed to `display_funding_table()` for user visibility
+   - Retry logic with exponential backoff for both EdgeX and Lighter volume fetches
+   - WARNING-level logging for volume fetch failures to aid debugging
+
+8. **Rate limit handling pattern** (lighter_edgex_hedge.py):
+   - `RateLimitError` exception class for specific rate limit error detection
+   - `is_rate_limit_error()`: Detects HTTP 429, "Too Many Requests", code 23000, or "rate limit" in error messages
+   - `retry_with_backoff()`: Generic async retry function with exponential backoff and jitter
+     - Configurable max_retries, initial_delay, backoff_factor, max_delay
+     - Random jitter prevents thundering herd problem
+     - Re-raises RateLimitError after all retries exhausted
+   - Staggered delays (0.5s) between symbol fetches to prevent concurrent API bombardment
+   - Smart startup optimization: skip funding scan when bot is already HOLDING
 
 ### Critical Implementation Details
 
@@ -527,6 +540,17 @@ This ensures immediate fills without true market orders' unpredictability.
 - **FIX:** Always use `int(env["EDGEX_ACCOUNT_ID"])` when creating EdgeXClient
 - This was a critical bug fixed in January 2025
 
+**API rate limit errors (HTTP 429 / "Too Many Requests"):**
+- Bot now automatically retries with exponential backoff (up to 3 times for funding, 2 times for volume)
+- Staggered delays (0.5s between symbols) prevent concurrent rate limit hits
+- If seeing persistent rate limits:
+  - Check WARNING-level logs for specific failure patterns
+  - Increase stagger delay in code if needed (currently 0.5s)
+  - Verify API quotas haven't been exceeded on exchange side
+  - Consider reducing number of `symbols_to_monitor` temporarily
+- Volume showing N/A: Usually transient rate limit issue, will retry automatically
+- Bot skips startup scan when HOLDING to conserve API quota
+
 ### Logging & Debugging
 
 **Console output:**
@@ -551,6 +575,35 @@ tail -f hedge_cli.log
 ```
 
 ## Recent Improvements (2025)
+
+### Rate Limit Handling & API Optimization (January 2025)
+- **Intelligent retry logic with exponential backoff**: Automatic recovery from API rate limits (HTTP 429)
+  - `retry_with_backoff()` function with configurable max retries, initial delay, backoff factor, and jitter
+  - Funding rate fetches: 3 retries, 2s initial delay
+  - Volume data fetches: 2 retries, 1s initial delay
+  - Exponential backoff with random jitter prevents thundering herd problem
+  - Specific `RateLimitError` exception class for clear error handling
+  - Errors logged at WARNING level for visibility
+- **Staggered API requests**: 0.5-second delay between symbol fetches
+  - Spreads 12 symbols over ~6 seconds instead of concurrent bombardment
+  - Implemented in both `open_best_position()` (ANALYZING) and monitoring (HOLDING)
+  - Significantly reduces rate limit risk (2.5x less aggressive than 0.2s delay)
+- **Smart startup optimization**: Skips initial funding scan when bot is already HOLDING
+  - Saves 24-36 API calls on restart (2-3 calls per symbol × 12 symbols)
+  - Only performs startup scan when in IDLE/WAITING states
+  - Displays: "Already holding position, skipping initial funding scan to conserve API quota"
+- **Enhanced error visibility**: Volume fetch failures logged at WARNING level
+  - EdgeX contract not found warnings
+  - Rate limit errors after retries
+  - Generic fetch failures
+- **Data validation**: Prevents trading when volume data unavailable
+  - `fetch_symbol_funding()` validates `total_volume is not None` when `check_volume=True`
+  - Returns `available: False` with reason "Volume data unavailable" for N/A volumes
+  - Display shows "✗ EXCLUDED: Volume N/A" for symbols without volume confirmation
+- **Monitoring table volume display**: Shows 24h volume even in HOLDING state
+  - Changed from `check_volume=False` to `check_volume=True` for monitoring display
+  - Real-time volume data with retry logic and staggered delays
+  - Helps user assess if better opportunities exist with sufficient liquidity
 
 ### Critical Bug Fixes (January 2025)
 - **Fixed EdgeX position closing bug**: `account_id` must be converted to `int` for EdgeX SDK
@@ -584,8 +637,10 @@ tail -f hedge_cli.log
 ### Volume Filtering (January 2025)
 - **Automatic liquidity filtering**: Bot checks 24h trading volume before selecting positions
 - **Configurable threshold**: Default minimum of $250M combined volume (EdgeX + Lighter)
-- **Real-time volume display**: Funding rate table shows current 24h volume for each symbol
-- **Smart filtering**: Volume check enabled for position selection, disabled for informational displays
+- **Real-time volume display**: Funding rate tables show current 24h volume for all symbols
+  - Displayed during startup (if not HOLDING), position selection (ANALYZING), and monitoring (HOLDING)
+  - Human-readable format: `$2.4B`, `$495M`, `$150M`, etc.
+- **Smart filtering**: Volume check enabled during position selection, with retry logic for failed fetches
 - **Customizable via config**: Set `min_volume_usd` in `bot_config.json` to your preferred threshold
 - Prevents positions in low-liquidity pairs that could have wide spreads or execution issues
 - Volume data retrieved from:
