@@ -203,16 +203,6 @@ The `capacity` command calculates maximum delta-neutral position size:
 
 ### Utility Scripts
 
-**`check_spread.py`** - Cross-exchange spread checker:
-```bash
-# Check spread for current position (reads from bot_state.json)
-python check_spread.py
-```
-- Fetches real-time mid prices from both exchanges for the active position
-- Calculates individual exchange spreads (bid-ask) and cross-exchange spread
-- Shows price changes since position entry
-- Useful for monitoring price convergence/divergence
-
 **`check_all_spreads.py`** - Multi-symbol spread analysis:
 ```bash
 # Check spreads for all symbols in bot_config.json
